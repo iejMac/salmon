@@ -22,9 +22,15 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalSelfAttention(config)
+        self.attn = CausalSelfAttention(
+            dim=config.n_embd,
+            n_head=config.n_head,
+            seq_len=config.block_size,
+            bias=config.bias,
+            dropout=config.dropout,
+        )
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.mlp = MLP(config)
+        self.mlp = MLP(dim=config.n_embd, mlp_ratio=4.0, bias=config.bias, dropout=config.dropout)
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
