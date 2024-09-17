@@ -6,14 +6,6 @@ import torch.distributed as dist
 
 
 class DistributedDataParallel(nn.Module):
-    """
-    - passes through forward
-    - all_reduce gradients during backward
-    - since we do this in backward, the optimizer doesn't need to know about DDP at all
-
-    TODO:
-    - backward hooks
-    """
     def __init__(self, module):
         super().__init__()
         self.module = module
@@ -24,6 +16,7 @@ class DistributedDataParallel(nn.Module):
         # TODO: do we need barrier here?
         # dist.barrier()
 
+        # TODO: implement buckets
         for p in self.parameters():
             p.register_hook(lambda g: dist.all_reduce(g))  # when gradient is computed, sync
 
@@ -37,10 +30,9 @@ if __name__ == "__main__":
     rank, world_size = dist.get_rank(), dist.get_world_size()
     torch.cuda.set_device(rank)
 
-    if rank == 1: # HACK: remove
-        time.sleep(2)
+    time.sleep(rank)
 
-    x = torch.randn((2, 8))
+    x = torch.randn((4, 8))
     model = nn.Linear(8, 4).cuda()
     ddp_model = DistributedDataParallel(model)
     optimizer = torch.optim.AdamW(ddp_model.parameters())
@@ -55,3 +47,12 @@ if __name__ == "__main__":
     print(f"rank {rank}/{world_size}: \nw: {ddp_model.module.weight.data}\nb: {ddp_model.module.bias.data}")
     dist.destroy_process_group()
     print("done")
+
+
+"""
+DistributedDataParallel notes
+
+data parallel (DP) training. 
+- model weights and optimizer replica on each device,
+- synchronization happens during backward pass. optimizer does not need to be aware this is happening
+"""
