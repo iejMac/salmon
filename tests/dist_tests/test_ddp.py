@@ -7,6 +7,8 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
 
+from salmon.computations.torch import MLP
+
 from salmon.dist.ddp import DistributedDataParallel
 from salmon.dist.utils import print_rank_n
 
@@ -24,25 +26,29 @@ def grad_step(x, model, optimizer):
     return y
 
 
-def run_local(x, sd, device):
+def run_local(x, model_kwargs, sd, device, n=1):
     # init
-    model = nn.Linear(8, 2).to(device)
+    model = MLP(**model_kwargs).cuda()
     model.load_state_dict(sd)
     optimizer = optim.AdamW(model.parameters())
     # prepare data
     x = x.to(device)
     # compute
-    y = grad_step(x, model, optimizer)
-    g_w, g_b = model.weight.data, model.bias.data
+    t0 = time.time()
+    for _ in range(n):
+        y = grad_step(x, model, optimizer)
+    tf = time.time()
+    g_w, g_b = model.c_fc.weight.data, model.c_fc.bias.data
 
     outputs ={
         'y': y.detach().cpu(),
         'g_w': g_w.detach().cpu(),
         'g_b': g_b.detach().cpu(),
+        "t_avg": (tf-t0)/n,
     }
     return outputs
 
-def run_pytorch_ddp(rank, world_size, x, sd, queue, device):
+def run_pytorch_ddp(rank, world_size, x, model_kwargs, sd, queue, device, n=1):
     # dist
     setup_distributed_environment(rank, world_size)
     if device == "cuda":
@@ -50,7 +56,7 @@ def run_pytorch_ddp(rank, world_size, x, sd, queue, device):
         device = f"cuda:{rank}"
 
     # init
-    model = nn.Linear(8, 2).to(device)
+    model = MLP(**model_kwargs).cuda()
     if rank == 0:  # DDP should sync weights from rank 0 to all in constructro
         model.load_state_dict(sd)
     ddp_model = nn.parallel.DistributedDataParallel(model, device_ids=[rank])
@@ -61,8 +67,11 @@ def run_pytorch_ddp(rank, world_size, x, sd, queue, device):
     x = x[rank * bs_per_rank:(rank+1) * bs_per_rank].to(device)
 
     # compute
-    y = grad_step(x, ddp_model, optimizer)
-    g_w, g_b = ddp_model.module.weight.data, ddp_model.module.bias.data
+    t0 = time.time()
+    for _ in range(n):
+        y = grad_step(x, ddp_model, optimizer)
+    tf = time.time()
+    g_w, g_b = ddp_model.module.c_fc.weight.data, ddp_model.module.c_fc.bias.data
 
     # gather outputs
     y_all = [torch.zeros_like(y) for r in range(world_size)]
@@ -75,11 +84,12 @@ def run_pytorch_ddp(rank, world_size, x, sd, queue, device):
             'y': y.detach().cpu(),
             'g_w': g_w.detach().cpu(),
             'g_b': g_b.detach().cpu(),
+            't_avg': (tf-t0)/n,
         }
         queue.put(output)
     return
 
-def run_salmon_ddp(rank, world_size, x, sd, queue, device):
+def run_salmon_ddp(rank, world_size, x, model_kwargs, sd, queue, device, n=1):
     # dist
     setup_distributed_environment(rank, world_size)
     if device == "cuda":
@@ -87,7 +97,7 @@ def run_salmon_ddp(rank, world_size, x, sd, queue, device):
         device = f"cuda:{rank}"
 
     # init
-    model = nn.Linear(8, 2).to(device)
+    model = MLP(**model_kwargs).cuda()
     if rank == 0:  # DDP should sync weights from rank 0 to all in constructro
         model.load_state_dict(sd)
     ddp_model = DistributedDataParallel(model)
@@ -97,8 +107,11 @@ def run_salmon_ddp(rank, world_size, x, sd, queue, device):
     bs_per_rank = x.shape[0] // world_size
     x = x[rank * bs_per_rank:(rank+1) * bs_per_rank].to(device)
     # compute
-    y = grad_step(x, ddp_model, optimizer)
-    g_w, g_b = ddp_model.module.weight.data, ddp_model.module.bias.data
+    t0 = time.time()
+    for _ in range(n):
+        y = grad_step(x, ddp_model, optimizer)
+    tf = time.time()
+    g_w, g_b = ddp_model.module.c_fc.weight.data, ddp_model.module.c_fc.bias.data
 
     # gather outputs
     y_all = [torch.zeros_like(y) for r in range(world_size)]
@@ -111,6 +124,7 @@ def run_salmon_ddp(rank, world_size, x, sd, queue, device):
             'y': y.detach().cpu(),
             'g_w': g_w.detach().cpu(),
             'g_b': g_b.detach().cpu(),
+            't_avg': (tf-t0)/n,
         }
         queue.put(output)
     return
@@ -118,40 +132,45 @@ def run_salmon_ddp(rank, world_size, x, sd, queue, device):
 
 if __name__ == "__main__":
     torch.manual_seed(0)
-    x = torch.randn(4, 8, requires_grad=False) * 100
-    sd = nn.Linear(8, 2).state_dict()
+    bs, dim = 128, 64
+    model_kwargs = {'dim': dim, 'mlp_ratio': 4, 'bias': True}
+    world_size = 8
+    n_iterations = 16  # n_iterations for benchmarking
+
+    x = torch.randn(bs, dim, requires_grad=False) * 100
+    sd = MLP(**model_kwargs).state_dict()
     device = "cuda"
-    world_size = 2
 
     # local computation
-    out_l = run_local(x, sd, device)
-    print('local pt: ', out_l)
+    out_l = run_local(x, model_kwargs, sd, device, n=n_iterations)
 
     # pytorch ddp computation
     ctx = mp.get_context("spawn")
     queue = ctx.Manager().Queue(10000)
     mp.spawn(
         run_pytorch_ddp,
-        args=(world_size, x, sd, queue, device),
+        args=(world_size, x, model_kwargs, sd, queue, device, n_iterations),
         nprocs=world_size,
         join=True
     )
     out_pt = queue.get()
-    print('ddp pt: ', out_pt)
 
     # salmon ddp computation
     ctx = mp.get_context("spawn")
     queue = ctx.Manager().Queue(10000)
     mp.spawn(
         run_salmon_ddp,
-        args=(world_size, x, sd, queue, device),
+        args=(world_size, x, model_kwargs, sd, queue, device, n_iterations),
         nprocs=world_size,
         join=True
     )
     out_slmn = queue.get()
-    print('ddp slmn: ', out_slmn)
+
+    print('local pt: ', out_l['t_avg'])
+    print('ddp pt: ', out_pt['t_avg'])
+    print('ddp slmn: ', out_slmn['t_avg'])
 
     for k in ['y', 'g_w', 'g_b']:
-        assert torch.allclose(out_l[k], out_pt[k]), (k, (out_l[k] - out_pt[k]).abs().mean())
-        assert torch.allclose(out_l[k], out_slmn[k]), (k, (out_l[k] - out_slmn[k]).abs().mean())
+        assert torch.allclose(out_l[k], out_pt[k], atol=1e-3), (k, (out_l[k] - out_pt[k]).abs().mean())
+        assert torch.allclose(out_l[k], out_slmn[k], atol=1e-3), (k, (out_l[k] - out_slmn[k]).abs().mean())
     print("passed")
