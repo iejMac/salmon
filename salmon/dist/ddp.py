@@ -10,48 +10,38 @@ from salmon.dist.utils import print_rank_n
 
 
 class DistributedDataParallel(nn.Module):
-    def __init__(self, module):
+    def __init__(self, module, num_buckets=2, world_size=None):
         super().__init__()
         self.module = module
+        self.world_size = dist.get_world_size() if world_size is None else world_size
 
+        # TODO: maybe just replicate the module on each DP rank from a mesh?
         sd = self.module.state_dict()
         for k in sd.keys():  # ensure all initial replicas are the same
             dist.broadcast(sd[k], 0)  # by default async_op = False
-
-        self.reducer = Reducer(self.module.named_parameters(), num_buckets=2)
-
-        # TODO: implement buckets
-        # for p in self.parameters():  # reducer with num_buckets = num_tensors
-        #     p.register_hook(lambda g: dist.all_reduce(g))  # when gradient is computed, sync
+        self.reducer = Reducer(self.module.named_parameters(), world_size=world_size, num_buckets=num_buckets)
 
     def forward(self, *args, **kwargs):
+        # TODO: find_unused_parameters. This will hang if some params don't become ready
+        self.reducer.unready_params()  # prepare for bwd
         out = self.module(*args, **kwargs)
         return out
 
 
 class Reducer:
-    """
-    I want both buckets and params to access the same bools
-    
-    p1 p2 p3 p4 p5
-    |  |  |  |  |
-    F  F  T  T  T
-    |  |  |     |
-    ----  -------
-     B1     B2
-
-    The point being, the autograd hooks set p.ready = True
-    And then we just check and(p2b[p])
-    """
-    def __init__(self, named_parameters, num_buckets=1):
+    def __init__(self, named_parameters, world_size, num_buckets=1):
+        self.num_buckets = num_buckets
+        self.world_size = world_size
         self.p_ready = {}
+        self.p_ref = {}
 
         # track readiness
         for k, p in named_parameters:
             p_mb = p.data.numel() * p.data.element_size() / (1024 ** 2)  # parameter size in MB
             self.p_ready[k] = False
-            is_ready = lambda g, k=k: self.ready_up(k)
-            p.register_hook(is_ready)
+            self.p_ref[k] = p
+            is_ready = lambda g, k=k: self.ready_param(k)
+            p.register_post_accumulate_grad_hook(is_ready)
 
         # create buckets
         # TODO: do based on p_mb, for now just uniformly
@@ -59,37 +49,36 @@ class Reducer:
         p_names.reverse()  # reverse order since thats usually order of grad computation
         bucket_size = len(p_names) // num_buckets
         self.buckets = [p_names[i * bucket_size:(i + 1) * bucket_size] for i in range(num_buckets)]
-        self.b_ready = [False for _ in range(num_buckets)]
+        self.b_work = [[] for _ in range(num_buckets)]
 
         self.p2b = {}  # useful mapping
         for i, b in enumerate(self.buckets):
             for kp in b:
                 self.p2b[kp] = i
 
-    def reset(self):
-        for k, p in self.p_ready:
-            self.p_ready[k] = False
-
-    def ready_up(self, k):
-        # TODO: do python dicts support async writes?
+    def ready_param(self, k):
         self.p_ready.update({k: True})  # set param
 
         # TODO: do we need to worry about race conditions here?
         # what if two parameters set p_ready at the same time?
         i = self.p2b[k]
-        b_i_ready = all([self.p_read[k] for k in self.blocks[i]])
+        b_i_ready = all([self.p_ready[k] for k in self.buckets[i]])
         if b_i_ready:
-            self.b_ready[i] = b_i_ready
-            self.sync_block(i)
+            for k in self.buckets[i]:  # sync bucket
+                work_k = dist.all_reduce(self.p_ref[k].grad, async_op=True)  # async all_reduce for bucket
+                self.b_work[i].append(work_k)
 
-        if all(self.b_ready):
-            dist.barrier()  # wait for all params to reduce
+        if all(self.b_work):  # wait for all params to reduce
+            for bucket_works in self.b_work:
+                for work in bucket_works:
+                    work.wait()  # block until all async ops are done
+            for k, p in self.p_ref.items(): # TODO: there must be a cleaner way of doing this, this can be done in parallel etc.
+                p.grad /= self.world_size
 
-    def sync_block(self, i):
-        for k in self.blocks[i]:
-            # TODO: trigger all_reduce for grad...
-            pass
-
+    def unready_params(self):
+        self.b_work = [[] for _ in range(self.num_buckets)]
+        for k in self.p_ready:
+            self.p_ready[k] = False
 
 
 if __name__ == "__main__":
@@ -100,20 +89,19 @@ if __name__ == "__main__":
 
     x = torch.randn((4, 8))
     model = MLP(8, 4, bias=True).cuda()
-    ddp_model = DistributedDataParallel(model)
+    ddp_model = DistributedDataParallel(model, num_buckets=2)
     optimizer = torch.optim.AdamW(ddp_model.parameters())
 
     bs_r = x.shape[0] // world_size
-    x = x[rank * bs_r:(rank + 1) * bs_r].cuda()
-    y = ddp_model(x)
-    loss = y.log().sum()
-    loss.backward()
-    optimizer.step()
+    x = x[rank * bs_r:(rank + 1) * bs_r].cuda() * 100.0
 
-    print(ddp_model.reducer.p_ready)
+    for i in range(4):
+        y = ddp_model(x)
+        loss = y.log().mean()
+        loss.backward()
+        optimizer.step()
 
-    # time.sleep(rank)
-    # print(f"rank {rank}/{world_size}: \nw: {ddp_model.module.c_fc.weight.data[:10]}\nb: {ddp_model.module.c_fc.bias.data}")
+    print_rank_n(f"rank {rank}/{world_size}: \nw: {ddp_model.module.c_fc.weight.data[:1, :5]}\nb: {ddp_model.module.c_fc.bias.data[:5]}\ny: {y}")
     dist.destroy_process_group()
     print("done")
 

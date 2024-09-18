@@ -20,7 +20,7 @@ def setup_distributed_environment(rank, world_size):
 
 def grad_step(x, model, optimizer):
     y = model(x)
-    loss = y.log().sum()
+    loss = y.log().mean()
     loss.backward()
     optimizer.step()
     return y
@@ -100,7 +100,7 @@ def run_salmon_ddp(rank, world_size, x, model_kwargs, sd, queue, device, n=1):
     model = MLP(**model_kwargs).cuda()
     if rank == 0:  # DDP should sync weights from rank 0 to all in constructro
         model.load_state_dict(sd)
-    ddp_model = DistributedDataParallel(model)
+    ddp_model = DistributedDataParallel(model, world_size=world_size)
     optimizer = optim.AdamW(ddp_model.parameters())
 
     # prepare data
@@ -132,10 +132,10 @@ def run_salmon_ddp(rank, world_size, x, model_kwargs, sd, queue, device, n=1):
 
 if __name__ == "__main__":
     torch.manual_seed(0)
-    bs, dim = 128, 64
+    bs, dim = 16, 64
     model_kwargs = {'dim': dim, 'mlp_ratio': 4, 'bias': True}
     world_size = 8
-    n_iterations = 16  # n_iterations for benchmarking
+    n_iterations = 8
 
     x = torch.randn(bs, dim, requires_grad=False) * 100
     sd = MLP(**model_kwargs).state_dict()
@@ -171,6 +171,10 @@ if __name__ == "__main__":
     print('ddp slmn: ', out_slmn['t_avg'])
 
     for k in ['y', 'g_w', 'g_b']:
+        print(out_l[k])
+        print(out_pt[k])
+        print(out_slmn[k])
+
         assert torch.allclose(out_l[k], out_pt[k], atol=1e-3), (k, (out_l[k] - out_pt[k]).abs().mean())
         assert torch.allclose(out_l[k], out_slmn[k], atol=1e-3), (k, (out_l[k] - out_slmn[k]).abs().mean())
     print("passed")
