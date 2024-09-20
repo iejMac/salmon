@@ -22,20 +22,21 @@ if __name__ == "__main__":
  
     torch.cuda.set_device(local_rank)
 
-    bs, dim = 1024, 512
-    n_layers = 4
+    bs, dim = 2048, 1024
+    n_layers = 10
     mlp_kwargs = {
         "dim": dim,
         "mlp_ratio": 4,
         "bias": True,
     }
-    n_iterations = 100
+    n_iterations = 20
+    backend="salmon"
+    run_name=f"{backend}_buffer_ddp_run"
+    print_rank_n(f"running with DDP backend: {backend}")
 
     x = torch.randn((bs, dim))
     model = nn.Sequential(*[MLP(**mlp_kwargs) for _ in range(n_layers)]).cuda()
 
-    backend="pytorch"
-    print_rank_n(f"running with DDP backend: {backend}")
     if backend == "pytorch":
         ddp_model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
     elif backend == "salmon":
@@ -49,10 +50,11 @@ if __name__ == "__main__":
     with profile(activities=[
             ProfilerActivity.CPU, 
             ProfilerActivity.CUDA], 
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=n_iterations - 3, repeat=1),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(f'./log/{run_name}'),
             record_shapes=True, profile_memory=True, with_stack=True) as prof:
         for i in range(n_iterations):  # fake training
+            prof.step()
             optimizer.zero_grad()
             y = ddp_model(x)
             loss = F.mse_loss(y, x)

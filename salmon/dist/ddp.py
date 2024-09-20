@@ -32,53 +32,62 @@ class Reducer:
     def __init__(self, named_parameters, world_size, num_buckets=1):
         self.num_buckets = num_buckets
         self.world_size = world_size
-        self.p_ready = {}
-        self.p_ref = {}
+
+        self.p_ref = {
+            "param": {},
+            "ready": {},
+            "grad_buffer": {},
+            "bucket": {},
+            "work": {},
+        }
 
         # track readiness
         for k, p in named_parameters:
             p_mb = p.data.numel() * p.data.element_size() / (1024 ** 2)  # parameter size in MB
-            self.p_ready[k] = False
-            self.p_ref[k] = p
+            self.p_ref["param"][k] = p
+            self.p_ref["ready"][k] = False
+            self.p_ref["grad_buffer"][k] = torch.zeros_like(p.data)
             is_ready = lambda g, k=k: self.ready_param(k)
             p.register_post_accumulate_grad_hook(is_ready)
 
         # create buckets
         # TODO: do based on p_mb, for now just uniformly
-        p_names = list(self.p_ready.keys())
+        p_names = list(self.p_ref["ready"].keys())
         p_names.reverse()  # reverse order since thats usually order of grad computation
         bucket_size = len(p_names) // num_buckets
         self.buckets = [p_names[i * bucket_size:(i + 1) * bucket_size] for i in range(num_buckets)]
-        self.b_work = [[] for _ in range(num_buckets)]
 
-        self.p2b = {}  # useful mapping
         for i, b in enumerate(self.buckets):
             for kp in b:
-                self.p2b[kp] = i
+                self.p_ref["bucket"][kp] = i
 
     def ready_param(self, k):
-        self.p_ready.update({k: True})  # set param
+        self.p_ref["ready"].update({k: True})  # set param
 
-        # TODO: do we need to worry about race conditions here?
-        # what if two parameters set p_ready at the same time?
-        i = self.p2b[k]
-        b_i_ready = all([self.p_ready[k] for k in self.buckets[i]])
+        b_i = self.p_ref["bucket"][k]
+        b_i_ready = all([self.p_ref["ready"][k] for k in self.buckets[b_i]])
         if b_i_ready:
-            for k in self.buckets[i]:  # sync bucket
-                work_k = dist.all_reduce(self.p_ref[k].grad, async_op=True)  # async all_reduce for bucket
-                self.b_work[i].append(work_k)
+            for k in self.buckets[b_i]:  # sync bucket
+                # work_k = dist.all_reduce(self.p_ref["param"][k].grad, async_op=True)  # async all_reduce for bucket
+                self.p_ref["grad_buffer"][k].copy_(self.p_ref["param"][k].grad)  # TODO: is this too slow? didn't see anythign like this in PT DDP
+                work_k = dist.all_reduce(self.p_ref["grad_buffer"][k], async_op=True)
+                self.p_ref["work"][k] = work_k
 
-        if all(self.b_work):  # wait for all params to reduce
-            for bucket_works in self.b_work:
-                for work in bucket_works:
-                    work.wait()  # block until all async ops are done
-            for k, p in self.p_ref.items(): # TODO: there must be a cleaner way of doing this, this can be done in parallel etc.
+        if len(self.p_ref["work"]) == len(self.p_ref["param"]):
+            for bucket in self.buckets:
+                for k in bucket:
+                    self.p_ref["work"][k].wait()
+                    self.p_ref["param"][k].grad.copy_(self.p_ref["grad_buffer"][k])
+
+            # TODO: https://github.com/pytorch/pytorch/blob/9b424aac1d70f360479dd919d6b7933b5a9181ac/torch/nn/parallel/distributed.py#L960
+            for p in self.p_ref["param"].values(): # TODO: there must be a cleaner way of doing this, this can be done in parallel etc.
                 p.grad /= self.world_size
 
     def unready_params(self):
         self.b_work = [[] for _ in range(self.num_buckets)]
-        for k in self.p_ready:
-            self.p_ready[k] = False
+        self.p_ref["work"] = {}
+        for k in self.p_ref["ready"].keys():
+            self.p_ref["ready"][k] = False
 
 
 if __name__ == "__main__":
@@ -89,7 +98,7 @@ if __name__ == "__main__":
 
     x = torch.randn((4, 8))
     model = MLP(8, 4, bias=True).cuda()
-    ddp_model = DistributedDataParallel(model, num_buckets=2)
+    ddp_model = DistributedDataParallel(model, num_buckets=2, world_size=world_size)
     optimizer = torch.optim.AdamW(ddp_model.parameters())
 
     bs_r = x.shape[0] // world_size
