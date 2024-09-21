@@ -16,7 +16,7 @@ setup(
     description="🐟",
     long_description=long_description,
     long_description_content_type="text/markdown",
-	author="Maciej Kilian",
+	author=["Maciej Kilian", "Maksymilian Wojnar"],
     url="https://github.com/iejMac/salmon",
     license="MIT",
     packages=find_packages(),
