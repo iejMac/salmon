@@ -39,7 +39,7 @@ class Reducer:
             "ready": {},
             "grad_buffer": {},
             "bucket": {},
-            "work": {},
+            "bucket_slice": {},
         }
 
         # track readiness
@@ -47,7 +47,6 @@ class Reducer:
             p_mb = p.data.numel() * p.data.element_size() / (1024 ** 2)  # parameter size in MB
             self.p_ref["param"][k] = p
             self.p_ref["ready"][k] = False
-            self.p_ref["grad_buffer"][k] = torch.zeros_like(p.data)
             is_ready = lambda g, k=k: self.ready_param(k)
             p.register_post_accumulate_grad_hook(is_ready)
 
@@ -57,35 +56,46 @@ class Reducer:
         bucket_size = len(p_names) // num_buckets
         # TODO: do based on p_mb, for now just uniformly
         self.buckets = [p_names[i * bucket_size:(i + 1) * bucket_size] for i in range(num_buckets)]
+        self.bucket_buffers = []
         for i, b in enumerate(self.buckets):
+            buffer_size = 0
             for kp in b:
                 self.p_ref["bucket"][kp] = i
+                n_weights = self.p_ref["param"][kp].numel()
+                start, end = buffer_size, buffer_size + n_weights
+                self.p_ref["bucket_slice"][kp] = slice(start, end)
+                buffer_size += n_weights
+                device, dtype = self.p_ref["param"][kp].device, self.p_ref["param"][kp].dtype  # assumption that all have the same device and dtype
+            self.bucket_buffers.append(torch.zeros((buffer_size,), dtype=dtype, device=device))
+        self.bucket_work = []
 
     def ready_param(self, k):
         self.p_ref["ready"].update({k: True})  # set param
 
         b_i = self.p_ref["bucket"][k]
+        p_sl = self.p_ref["bucket_slice"][k]
+        self.bucket_buffers[b_i][p_sl].copy_(self.p_ref["param"][k].grad.view(-1))  # copy the flattened grad into buffer
         b_i_ready = all([self.p_ref["ready"][k] for k in self.buckets[b_i]])
         if b_i_ready:
-            for k in self.buckets[b_i]:  # sync bucket
-                # https://github.com/pytorch/pytorch/blob/687e5cf8c5a511494c41bf061653e45c3c521bf0/torch/nn/parallel/distributed.py#L940
-                self.p_ref["param"][k].grad.div_(self.world_size)
-                work_k = dist.all_reduce(self.p_ref["param"][k].grad, async_op=True)  # async all_reduce for bucket
-                # self.p_ref["grad_buffer"][k].copy_(self.p_ref["param"][k].grad)  # TODO: is this too slow? didn't see anythign like this in PT DDP
-                # work_k = dist.all_reduce(self.p_ref["grad_buffer"][k], async_op=True)
-                self.p_ref["work"][k] = work_k
+            self.bucket_buffers[b_i].div_(self.world_size)
+            work_b = dist.all_reduce(self.bucket_buffers[b_i], async_op=True)
+            self.bucket_work.append(work_b)
 
-        if len(self.p_ref["work"]) == len(self.p_ref["param"]):
-            for bucket in self.buckets:
-                for k in bucket:
-                    self.p_ref["work"][k].wait()
-                    # self.p_ref["param"][k].grad.copy_(self.p_ref["grad_buffer"][k])
+        if len(self.bucket_work) == len(self.buckets):
+            for b_i, bw in enumerate(self.bucket_work):
+                bw.wait()
+                for k in self.buckets[b_i]:
+                    b_i = self.p_ref["bucket"][k]
+                    p_sl = self.p_ref["bucket_slice"][k]
+                    g_sh = self.p_ref["param"][k].grad.shape
+                    self.p_ref["param"][k].grad.copy_(self.bucket_buffers[b_i][p_sl].view(g_sh))
 
     def reset(self):
-        self.p_ref["work"] = {}
+        self.bucket_work = []
+        for buf in self.bucket_buffers:
+            buf.zero_()
         for k in self.p_ref["ready"].keys():
             self.p_ref["ready"][k] = False
-            self.p_ref["grad_buffer"][k].zero_()
 
 
 if __name__ == "__main__":
@@ -102,34 +112,12 @@ if __name__ == "__main__":
     bs_r = x.shape[0] // world_size
     x = x[rank * bs_r:(rank + 1) * bs_r].cuda() * 100.0
 
-    for i in range(4):
+    for i in range(2):
         y = ddp_model(x)
-        loss = y.log().mean()
+        loss = y.mean()
         loss.backward()
         optimizer.step()
 
     print_rank_n(f"rank {rank}/{world_size}: \nw: {ddp_model.module.c_fc.weight.data[:1, :5]}\nb: {ddp_model.module.c_fc.bias.data[:5]}\ny: {y}")
     dist.destroy_process_group()
     print("done")
-
-
-"""
-DistributedDataParallel notes
-
-data parallel (DP) training. 
-- model weights and optimizer replica on each device,
-- synchronization happens during backward pass.
-- optimizer does not need to be aware this is happening
-
-TODO reducer: 
-- backward hook highlights the current param as "ready for sync" in reducer
-- when all grads in one bucket are ready, launch async all_reduce
-- when all buckets ready, barrier so all all_reduce can finish
-- when everything done, write output to param.grad
-
-- important to invoke all_reduce in the same order so just do it in bucket index order
-
-Qs:
-- why do we need to copy in last step? why not just reduce into params.grad?
-- why can't you just do async all_reduce 
-"""

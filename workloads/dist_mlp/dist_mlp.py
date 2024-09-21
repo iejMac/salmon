@@ -29,10 +29,9 @@ if __name__ == "__main__":
         "mlp_ratio": 4,
         "bias": True,
     }
-    n_iterations = 100
+    n_iterations = 20
     backend="salmon"
-    run_name=f"{backend}_nobuf_postdiv"
-    # run_name=f"{backend}_nobuf_prediv"
+    run_name=f"{backend}_buckets"
     # run_name = backend
     print_rank_n(f"running DDP[{backend}] at {run_name}")
 
