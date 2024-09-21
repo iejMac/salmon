@@ -29,10 +29,12 @@ if __name__ == "__main__":
         "mlp_ratio": 4,
         "bias": True,
     }
-    n_iterations = 20
+    n_iterations = 100
     backend="salmon"
-    run_name=f"{backend}_buffer_ddp_run"
-    print_rank_n(f"running with DDP backend: {backend}")
+    run_name=f"{backend}_nobuf_postdiv"
+    # run_name=f"{backend}_nobuf_prediv"
+    # run_name = backend
+    print_rank_n(f"running DDP[{backend}] at {run_name}")
 
     x = torch.randn((bs, dim))
     model = nn.Sequential(*[MLP(**mlp_kwargs) for _ in range(n_layers)]).cuda()
@@ -40,7 +42,7 @@ if __name__ == "__main__":
     if backend == "pytorch":
         ddp_model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
     elif backend == "salmon":
-        ddp_model = DistributedDataParallel(model, num_buckets=n_layers, world_size=world_size)
+        ddp_model = DistributedDataParallel(model, num_buckets=n_layers//2, world_size=world_size)
     optimizer = torch.optim.AdamW(ddp_model.parameters())
 
     bs_r = x.shape[0] // world_size
@@ -63,11 +65,6 @@ if __name__ == "__main__":
         dist.barrier()
     tf = time.time()
     print_rank_n(f"time/sample: {(tf-t0)/n_iterations}")
-
-    param_sum = sum([p.sum() for p in ddp_model.module.parameters()])
-    time.sleep(rank)
-    print(f"rank {rank}: y_sum: {y.mean()}, loss: {loss.mean()}, param_sum: {param_sum}")
-
 
     dist.destroy_process_group()
     print(f"rank[{rank}] done")
