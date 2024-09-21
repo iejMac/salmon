@@ -31,7 +31,7 @@ if __name__ == "__main__":
     }
     n_iterations = 20
     backend="salmon"
-    run_name=f"{backend}_buckets"
+    run_name=f"{backend}_buckets_50mb"
     # run_name = backend
     print_rank_n(f"running DDP[{backend}] at {run_name}")
 
@@ -41,7 +41,7 @@ if __name__ == "__main__":
     if backend == "pytorch":
         ddp_model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
     elif backend == "salmon":
-        ddp_model = DistributedDataParallel(model, num_buckets=n_layers//2, world_size=world_size)
+        ddp_model = DistributedDataParallel(model, world_size=world_size, bucket_cap_mb=50.0)
     optimizer = torch.optim.AdamW(ddp_model.parameters())
 
     bs_r = x.shape[0] // world_size
