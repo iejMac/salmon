@@ -43,7 +43,7 @@ if __name__ == "__main__":
     x = torch.randn((4, 1024))
     model = nn.Sequential(*[MLP(1024, 4, bias=True) for _ in range(10)]).cuda()
 
-    ddp_model = DistributedDataParallel(model, world_size=world_size, bucket_cap_mb=25.0)
+    ddp_model = DistributedDataParallel(model, world_size=world_size, bucket_cap_mb=50.0)
     optimizer = torch.optim.AdamW(ddp_model.parameters())
 
     bs_r = x.shape[0] // world_size

@@ -47,8 +47,6 @@ class Reducer:
         if len(cur_bucket) > 0:  # remainder in new bucket
             self.b_params.append(cur_bucket)
 
-        print(self.b_params)
-
         # create buffers
         for b_ps in self.b_params:
             buffer_size = 0
@@ -60,8 +58,6 @@ class Reducer:
                 device, dtype = self.params[k].device, self.params[k].dtype  # ASSUMPTION: all have the same device and dtype
             self.grad_buffers.append(torch.zeros((buffer_size,), dtype=dtype, device=device))
         self.b_work = []
-
-        quit()
 
     def _post_grad_hook(self, k):
         self.p_ready.update({k: True})  # ready up param
