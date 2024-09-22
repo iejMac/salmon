@@ -25,7 +25,10 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
+from salmon.dist.ddp import DistributedDataParallel as DDPSlmn
 from torch.distributed import init_process_group, destroy_process_group
+
+from salmon.dist.utils import print_rank_n
 
 from gpt import GPTConfig, GPT
 
@@ -209,7 +212,10 @@ if compile:
 
 # wrap model into DDP container
 if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank])
+    if "slmn" in wandb_run_name:
+        model = DDPSlmn(model)
+    else:
+        model = DDP(model, device_ids=[ddp_local_rank])
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
