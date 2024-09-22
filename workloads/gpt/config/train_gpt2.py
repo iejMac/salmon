@@ -4,7 +4,8 @@
 
 wandb_log = True
 wandb_project = 'owt'
-wandb_run_name='gpt2-124M'
+# wandb_run_name='gpt2-124M-DDPpt'
+wandb_run_name='gpt2-124M-DDPslmn'
 
 # these make the total batch size be ~0.5M
 # 12 batch size * 1024 block size * 5 gradaccum * 8 GPUs = 491,520
@@ -17,8 +18,10 @@ max_iters = 600000
 lr_decay_iters = 600000
 
 # eval stuff
-eval_interval = 1000
-eval_iters = 200
+# eval_interval = 1000
+eval_interval = 100
+# eval_iters = 200
+eval_iters = 20
 log_interval = 10
 
 # weight decay

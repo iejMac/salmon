@@ -11,10 +11,12 @@ from salmon.dist.utils import print_rank_n
 
 
 class DistributedDataParallel(nn.Module):
-    def __init__(self, module, world_size=None, bucket_cap_mb=25.0):
+    def __init__(self, module, bucket_cap_mb=50.0):
         super().__init__()
         self.module = module
-        self.world_size = dist.get_world_size() if world_size is None else world_size
+        # self.world_size = dist.get_world_size() if world_size is None else world_size
+        self.world_size = dist.get_world_size()
+        self.bucket_cap_mb = bucket_cap_mb
 
         # TODO: maybe just replicate the module on each DP rank from a mesh?
         sd = self.module.state_dict()
@@ -23,7 +25,7 @@ class DistributedDataParallel(nn.Module):
         self.module.load_state_dict(sd)
 
         # reducer handles gradient bucketing and asynchronousa all_reduce
-        self.reducer = Reducer(self.module.named_parameters(), world_size=world_size, bucket_cap_mb=bucket_cap_mb)
+        self.reducer = Reducer(self.module.named_parameters(), world_size=self.world_size, bucket_cap_mb=self.bucket_cap_mb)
 
     def forward(self, *args, **kwargs):
         # TODO: find_unused_parameters. This will hang if some params don't become ready
