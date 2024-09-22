@@ -1,6 +1,8 @@
 import torch
 import torch.distributed as dist
 
+from salmon.dist.utils import print_rank_n
+
 
 class Reducer:
     """
@@ -77,7 +79,6 @@ class Reducer:
             for b_i, bw in enumerate(self.b_work):
                 bw.wait()
                 for k in self.b_params[b_i]:  # copy grad back into param.grad
-                    b_i = self.p_bucket[k]  # get bucket idx to select buffer
                     p_sl = self.p_gb_slice[k]  # slice out correct grad
                     g_sh = self.params[k].grad.shape # inflate back to normal shape via .view
                     self.params[k].grad.copy_(self.grad_buffers[b_i][p_sl].view(g_sh))
