@@ -23,63 +23,64 @@ def _get_submodules(root_module):
         modules.append(module)
     dfs(root_module)
     return modules
-def _get_managed_states(modules):
-    params = []
-    buffers = []
-    # Track visited parameters/buffers to avoid visiting shared parameters and
-    # buffers multiple times
-    visited_params = set()
-    visited_buffers = set()
-    for module in modules:
-        for param in module.parameters(recurse=False):
-            if param not in visited_params:
-                params.append(param)
-                visited_params.add(param)
-        for buffer in module.buffers(recurse=False):
-            if buffer not in visited_buffers:
-                buffers.append(buffer)
-                visited_buffers.add(buffer)
-    return params, buffers
 
 
+class FSDPModule(nn.Module):
+    def __init__(self, root_module, device_mesh):
+        super().__init__()
+        self.root_module = root_module
+        self.device_mesh = device_mesh
 
+        self.submodules = _get_submodules(self.root_module)
+        self._shard()
 
-def fsdp_shard(tensor, mesh):
-    placements = [Shard(0)]
-    return distribute_tensor(tensor, mesh, placements)
+    def _shard(self):
+        for mod in self.submodules:
+            for n, p in mod.named_parameters(recurse=False):
+                fsdp_placements = [Shard(0)]
+                d_param = torch.nn.Parameter( # shard params on dim 0
+                    distribute_tensor(p.data, self.device_mesh, fsdp_placements)
+                )
+                mod.register_parameter(n, d_param)
 
+    def _unshard(self):
+        for mod in self.submodules:
+            for n, p in mod.named_parameters(recurse=False):
+                d_param = torch.nn.Parameter( # shard params on dim 0
+                    p.data.full_tensor()
+                )
+                mod.register_parameter(n, d_param)
 
-def fully_shard(module, device_mesh):
-
-    submodules = _get_submodules(module)
-    params, buffers = _get_managed_states(submodules)
-    print_rank_n([p.data.shape for p in params])
-
-    # for n, p in module.named_parameters():
-    #     d_param = torch.nn.Parameter(
-    #         fsdp_shard(p.data, device_mesh)
-    #     )
-    #     module.register_parameter(n, d_param)
-
-    # for n, p in module.named_parameters():
-    #     print(n, type(p.data))
-
-    return module
-
+    def forward(self, *args, **kwargs):
+        self._unshard()
+        out = self.root_module(*args, **kwargs)
+        self._shard()
+        return out
 
 
 if __name__ == "__main__":
     device_mesh = init_device_mesh("cuda", (2,), mesh_dim_names=("sh",))
+    ws = dist.get_world_size()
     rank = dist.get_rank()
 
     shard_mesh = device_mesh["sh"]
 
+    x = torch.randn(2, 8).cuda()
+
     mlp = MLP(8, 4, bias=True)
-    fully_shard(mlp, shard_mesh)
+    fsdp_mlp = FSDPModule(mlp, shard_mesh)
 
-    # print(type(mlp.c_fc.weight.data))
-    # print_rank_n(mlp.c_fc.weight.data)
+    for n, p in fsdp_mlp.root_module.named_parameters():
+        print_rank_n(n, type(p.data))
+        print_rank_n(p.data.shape)
+        print_rank_n(p.data.to_local().shape)
 
+
+    # we need to call in the param group.
+    # wrapping needed!
+    y = fsdp_mlp(x)
+
+    print(y.shape)
 
 
 
