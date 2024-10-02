@@ -1,9 +1,12 @@
 import time
 
+from typing import Any, List
+
 import torch
-import torch.nn as nn
 import torch.distributed as dist
 from torch.distributed._tensor import DTensor, Shard, Replicate, distribute_tensor, distribute_module, init_device_mesh
+from torch.distributed.device_mesh import DeviceMesh
+from torch.utils._pytree import tree_flatten
 
 from salmon.computations.torch import MLP
 from salmon.dist.utils import print_rank_n
@@ -25,36 +28,103 @@ def _get_submodules(root_module):
     return modules
 
 
-class FSDPModule(nn.Module):
+class FSDPParam:
+    def __init__(self, param: torch.nn.Parameter, param_name: str, ref_module: torch.nn.Module):
+        self.dtype = param.dtype
+        self.requires_grad = param.requires_grad
+        self.ref_module = ref_module  # param belongs to this module
+        self.param_name = param_name  # param has this name in ref_module
+
+    # TODO: something here is breaking the computational graph...
+    def _shard(self, device_mesh: DeviceMesh):
+        fsdp_placements = [Shard(0)]
+        param = getattr(self.ref_module, self.param_name)
+        d_param = torch.nn.Parameter(
+            DTensor.from_local(param.data, device_mesh).redistribute(device_mesh, fsdp_placements)
+        )
+        d_param.requires_grad = self.requires_grad
+        # TODO: fast/unsafe/(evil) register
+        self.ref_module.register_parameter(self.param_name, d_param)
+
+    def _unshard(self):
+        param = getattr(self.ref_module, self.param_name)
+        d_param = torch.nn.Parameter(
+            param.data.full_tensor()
+        )
+        d_param.requires_grad = self.requires_grad
+        self.ref_module.register_parameter(self.param_name, d_param)
+
+
+class FSDPParamGroup:
+    def __init__(self, module: torch.nn.Module, device_mesh: DeviceMesh):
+        self.device_mesh = device_mesh
+
+        submodules = _get_submodules(module)
+        param_info = [(p, n, mod) for mod in submodules for n, p in mod.named_parameters(recurse=False)]
+        self.param_group = [FSDPParam(*p_info) for p_info in param_info]
+
+        for p in self.param_group:  # init sharding
+            p._shard(self.device_mesh)
+
+        self.state = None
+
+    def _pre_forward(self):
+        for fp in self.param_group:
+            fp._unshard()  # all-gather weights
+            # TODO: make async
+        # TODO: wait
+        self.state = "forward"
+
+    def _post_forward(self):
+        for fp in self.param_group:
+            fp._shard(self.device_mesh)  # re-shard
+            # NOTE: we don't need to send anything, just delete what you don't need
+            # not sure if normal re-distribute will do this or send
+
+    def _pre_backward(self, *unused: Any):
+        if self.state == "backward":  # unshard already called
+            return
+        self.state = "backward"
+        for fp in self.param_group:
+            fp._unshard()  # all-gather weights
+
+    def _post_backward(self):
+        # TODO: reduce-scatter gradients
+
+        # TODO: release
+        for fp in self.param_group:
+            fp._shard(self.device_mesh)  # re-shard
+            # NOTE: we don't need to send anything, just delete what you don't need
+            # not sure if normal re-distribute will do this or send
+
+
+class FSDPModule(torch.nn.Module):
     def __init__(self, root_module, device_mesh):
         super().__init__()
         self.root_module = root_module
         self.device_mesh = device_mesh
 
-        self.submodules = _get_submodules(self.root_module)
-        self._shard()
+        self.fsdp_param_group = FSDPParamGroup(self.root_module, self.device_mesh)
 
-    def _shard(self):
-        for mod in self.submodules:
-            for n, p in mod.named_parameters(recurse=False):
-                fsdp_placements = [Shard(0)]
-                d_param = torch.nn.Parameter( # shard params on dim 0
-                    distribute_tensor(p.data, self.device_mesh, fsdp_placements)
-                )
-                mod.register_parameter(n, d_param)
+    def _post_forward(self, output):
+        self.fsdp_param_group._post_forward()
+        # NOTE: if backward called on any output tensor, prepare for backward in cur layer
+        flat_outputs, _ = tree_flatten(output)
+        tensors = [t for t in flat_outputs if (torch.is_tensor(t) and t.requires_grad)]
+        if tensors:
+            for tensor in tensors:
+                tensor.register_hook(self._pre_backward)
+        return output
 
-    def _unshard(self):
-        for mod in self.submodules:
-            for n, p in mod.named_parameters(recurse=False):
-                d_param = torch.nn.Parameter( # shard params on dim 0
-                    p.data.full_tensor()
-                )
-                mod.register_parameter(n, d_param)
+    def _pre_backward(self, grad: torch.Tensor):
+        self.fsdp_param_group._pre_backward()
+        print_rank_n(grad)
+        return grad
 
     def forward(self, *args, **kwargs):
-        self._unshard()
+        self.fsdp_param_group._pre_forward()
         out = self.root_module(*args, **kwargs)
-        self._shard()
+        out = self._post_forward(out)
         return out
 
 
@@ -70,84 +140,14 @@ if __name__ == "__main__":
     mlp = MLP(8, 4, bias=True)
     fsdp_mlp = FSDPModule(mlp, shard_mesh)
 
-    for n, p in fsdp_mlp.root_module.named_parameters():
-        print_rank_n(n, type(p.data))
-        print_rank_n(p.data.shape)
-        print_rank_n(p.data.to_local().shape)
+    for i in range(1):
+        y = fsdp_mlp(x)
+        print_rank_n(y.shape)
+        # print_rank_n(y)
 
-
-    # we need to call in the param group.
-    # wrapping needed!
-    y = fsdp_mlp(x)
-
-    print(y.shape)
-
-
-
-"""
-NOTE:
-- If we do sharding properly and the wrapped FSDP only contains cur device shard 
-  then optimizer should be fine since we just input dist_model.params()
-
-TODO:
-- model sharding
-    - type:
-        - normal
-        - hybrid (DDP between nodes, FSDP within)
-    - wrapping policy
-        - user defines which layers should be wrapped in FSDP
-    - max size shards
-        - get device size, shard uniformly max-size shards 
-
-- computation/communication in fwd/bwd
-
-
-REFS:
-- FSDP2 debugging: https://x.com/HamelHusain/status/1800315287574847701
-
-
-FSDP2:
-- you create an FSDPParamGroup for each layer, there you also not that this layer has been wrapped
-- then you run fully_shard on the full model (not sure why?)
-
-fully_shard creates FDSPParamGroup
-
-FSDPParamGroup creates FSDPParam
-
-FSDPParam does DTensor stuff? 
-
-What is FSDPState?
-
-
-"""
-
-'''
-if __name__ == "__main__":
-    torch.manual_seed(0)
-    dist.init_process_group(backend="nccl", init_method="env://")  
-    rank, world_size = dist.get_rank(), dist.get_world_size()
-    torch.cuda.set_device(rank)
-
-    X = torch.randn((2, 8)).cuda()
-    model = MLP(8, 4, bias=True).cuda()
-    # X = torch.randn((4, 1024)).cuda()
-    # model = torch.nn.Sequential(*[MLP(1024, 4, bias=True) for _ in range(10)]).cuda()
-
-    dist_model = FSDP(model)
-    optimizer = torch.optim.AdamW(dist_model.parameters())
-
-    bs_r = X.shape[0] // world_size
-    x = X[rank * bs_r:(rank + 1) * bs_r].cuda() * 100.0
-
-    for i in range(4):
-        y = dist_model(x)
         loss = y.mean()
         loss.backward()
-        optimizer.step()
 
-    Y = dist_model(X)
-
-    print_rank_n(Y.sum(), rank=rank)
-    dist.destroy_process_group()
-    print("done")
-'''
+        print_rank_n(type(fsdp_mlp.root_module.c_fc.weight.data))  # None
+        print_rank_n(fsdp_mlp.root_module.c_fc.weight.grad)  # None
+        print_rank_n(fsdp_mlp.root_module.c_fc.weight.requires_grad)  # None
