@@ -6,7 +6,9 @@ import torch
 import torch.nn.functional as F
 
 from model import CNN
+from config import base_training, base_model, base_optimizer
 from data import CIFAR10Dataset
+
 
 class CSVLogger:
     def __init__(self, run_name=None, fieldnames=None, log_dir="./logs"):
@@ -51,29 +53,31 @@ def evaluate(model, test_dataloader, n_steps):
     return stats
 
 
-def train():
-    seed = 0
-    batch_size = 128
-    n_train_steps = 50000
-    n_eval_steps, eval_freq = 32, 500
-
+def train(
+        run_name,
+        model_config, optimizer_config,
+        batch_size, 
+        n_train_steps, n_eval_steps,
+        eval_freq, log_freq,
+        seed=0,
+        run_dir="./runs", data_dir="./data",
+    ):
     torch.manual_seed(seed)
 
-    log_freq = 100
     run_name = "test_cifar"
-    run_dir = "./runs"
     logger = CSVLogger(run_name=run_name, fieldnames=["step", "train_loss", "train_acc", "val_loss", "val_acc"], log_dir=run_dir)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    data_dir = "./data"
     train_loader = CIFAR10Dataset(batch_size=batch_size, train=True, device=device, root=data_dir)
     test_loader = CIFAR10Dataset(batch_size=batch_size, train=False, device=device, root=data_dir)
 
-    model = CNN(n_layers=3, hidden_channels=128)
+    # model = CNN(n_layers=3, hidden_channels=128)
+    model = model_config().build()
     model = model.to(device)
     print(f"model has {sum([p.numel() for p in model.parameters()])} parameters")
 
-    opt = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
+    # opt = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
+    opt = optimizer_config().build(params=model.parameters())
 
     s = 0
     for X, y in train_loader:
@@ -101,4 +105,9 @@ def train():
 
 
 if __name__ == "__main__":
-    train()
+    run_name = "test_cifar"
+    model_config = base_model
+    optimizer_config = base_optimizer
+
+    # train()
+    base_training().build(run_name=run_name, model_config=model_config, optimizer_config=optimizer_config)
