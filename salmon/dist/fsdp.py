@@ -5,6 +5,7 @@ from typing import Any, List
 import torch
 import torch.distributed as dist
 from torch.distributed._tensor import DTensor, Shard, Replicate, distribute_tensor, distribute_module, init_device_mesh
+from torch.distributed._tensor.placement_types import DTensorSpec, TensorMeta
 from torch.distributed.device_mesh import DeviceMesh
 from torch.utils._pytree import tree_flatten
 
@@ -30,29 +31,36 @@ def _get_submodules(root_module):
 
 class FSDPParam:
     def __init__(self, param: torch.nn.Parameter, param_name: str, ref_module: torch.nn.Module):
-        self.dtype = param.dtype
-        self.requires_grad = param.requires_grad
         self.ref_module = ref_module  # param belongs to this module
         self.param_name = param_name  # param has this name in ref_module
 
-    # TODO: something here is breaking the computational graph...
-    def _shard(self, device_mesh: DeviceMesh):
-        fsdp_placements = [Shard(0)]
+    def _init_sharded_param(self, device_mesh):
         param = getattr(self.ref_module, self.param_name)
-        d_param = torch.nn.Parameter(
-            DTensor.from_local(param.data, device_mesh).redistribute(device_mesh, fsdp_placements)
-        )
-        d_param.requires_grad = self.requires_grad
-        # TODO: fast/unsafe/(evil) register
-        self.ref_module.register_parameter(self.param_name, d_param)
+
+        self.cached_data = torch.clone(param.data)
+        temp = torch.zeros_like(param.data)
+
+        d_param = torch.nn.Parameter(temp)
+
+        # fsdp_placements = [Shard(0)]
+
+        # d_param = torch.nn.Parameter(
+        #     DTensor.from_local(param.data, device_mesh).redistribute(device_mesh, fsdp_placements)
+        #     # DTensor.from_local(param.data, device_mesh)
+        # )
+        # d_param.requires_grad = param.requires_grad
+        # self.ref_module.register_parameter(self.param_name, d_param)
+        setattr(self.ref_module, self.param_name, d_param)
+
+    def _shard(self, device_mesh: DeviceMesh):
+        pass
 
     def _unshard(self):
         param = getattr(self.ref_module, self.param_name)
-        d_param = torch.nn.Parameter(
-            param.data.full_tensor()
-        )
-        d_param.requires_grad = self.requires_grad
-        self.ref_module.register_parameter(self.param_name, d_param)
+        d_param = torch.nn.Parameter(self.cached_data)
+        # d_param.requires_grad = param.requires_grad
+        # self.ref_module.register_parameter(self.param_name, d_param)
+        setattr(self.ref_module, self.param_name, d_param)
 
 
 class FSDPParamGroup:
@@ -64,7 +72,7 @@ class FSDPParamGroup:
         self.param_group = [FSDPParam(*p_info) for p_info in param_info]
 
         for p in self.param_group:  # init sharding
-            p._shard(self.device_mesh)
+            p._init_sharded_param(self.device_mesh)
 
         self.state = None
 
@@ -118,7 +126,6 @@ class FSDPModule(torch.nn.Module):
 
     def _pre_backward(self, grad: torch.Tensor):
         self.fsdp_param_group._pre_backward()
-        print_rank_n(grad)
         return grad
 
     def forward(self, *args, **kwargs):
@@ -126,6 +133,23 @@ class FSDPModule(torch.nn.Module):
         out = self.root_module(*args, **kwargs)
         out = self._post_forward(out)
         return out
+
+
+"""
+I think the way this is done is by resizing param tensors
+
+all_gather weights into some joint big tensor buffer
+
+If unsharded_param doesn't exist, create it
+If exists allocate_storage, and copy in gathered weights
+To free, just resize to 0
+
+sharded_param stores DTensor I think
+to create sharded_param use all_gather output
+
+They are hotswapping though so idk why this breaks...
+"""
+
 
 
 if __name__ == "__main__":
@@ -137,7 +161,47 @@ if __name__ == "__main__":
 
     x = torch.randn(2, 8).cuda()
 
-    mlp = MLP(8, 4, bias=True)
+    # TESTING
+    class FakeModule(torch.nn.Module):
+        def __init__(self, w_dat):
+            super().__init__()
+            self.W = torch.nn.Parameter(w_dat)
+        def forward(self, x):
+            return x @ self.W
+
+    w_dat = torch.randn(8, 4).cuda()
+    mod = FakeModule(w_dat)
+
+    sh_dat = torch.zeros_like(w_dat)
+    sharded_param = torch.nn.Parameter(sh_dat)
+    ush_dat = torch.ones_like(w_dat)
+    unsharded_param = torch.nn.Parameter(ush_dat)
+
+    # swap in unsharded
+    setattr(mod, "W", unsharded_param)
+
+    y = mod(x)  # fwd graph set?
+
+    # swap in sharded
+    setattr(mod, "W", sharded_param)
+    # save dat
+    cch_dat = torch.clone(unsharded_param.data)
+    unsharded_param.data.resize_(0)
+
+    # recover dims before bwd
+    # unsharded_param.data.resize_(ush_dat.size())
+    # unsharded_param.data.copy_(cch_dat)
+    setattr(mod, "W", unsharded_param)
+
+    y.sum().backward()
+
+    print_rank_n(unsharded_param.grad)
+
+
+    quit()
+    # TESTING
+
+    mlp = MLP(8, 4, bias=True).cuda()
     fsdp_mlp = FSDPModule(mlp, shard_mesh)
 
     for i in range(1):
@@ -150,4 +214,5 @@ if __name__ == "__main__":
 
         print_rank_n(type(fsdp_mlp.root_module.c_fc.weight.data))  # None
         print_rank_n(fsdp_mlp.root_module.c_fc.weight.grad)  # None
-        print_rank_n(fsdp_mlp.root_module.c_fc.weight.requires_grad)  # None
+        # print_rank_n(type(fsdp_mlp.root_module.c_proj.weight.data))  # None
+        # print_rank_n(fsdp_mlp.root_module.c_proj.weight.grad)  # None
