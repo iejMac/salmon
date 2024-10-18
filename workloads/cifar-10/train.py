@@ -126,9 +126,8 @@ if __name__ == "__main__":
     worker_id = int(os.environ["WORKER_ID"])
     n_workers = int(os.environ["N_WORKERS"])
 
-    N = 40
-    widths = [32 + 8*i for i in range(N)]
-    lrs = np.logspace(np.log10(1e-4), np.log10(1e-1), num=N).tolist()
+    widths = [2, 8, 16, 32, 64, 128, 256, 512]
+    lrs = np.power(10, np.linspace(-6, -1, num=32)).tolist()
 
     for w_id, w in enumerate(widths):
         for lr_id, lr in enumerate(lrs):
