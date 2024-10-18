@@ -14,7 +14,7 @@ from data import CIFAR10Dataset
 class CSVLogger:
     def __init__(self, fieldnames=None, log_dir="./logs", overwrite=True):
         os.makedirs(log_dir, exist_ok=True)
-        self.file = open(os.path.join(log_dir, f"{'metrics' if overwrite else datetime.now().strftime('metrics_%Y%m%d_%H%M%S')}.csv"), 'w', newline='')
+        self.file = open(os.path.join(log_dir, f"{'metrics' if overwrite else datetime.datetime.now().strftime('metrics_%Y%m%d_%H%M%S')}.csv"), 'w', newline='')
         self.writer = csv.DictWriter(self.file, fieldnames=fieldnames)
         self.writer.writeheader()
 
@@ -67,7 +67,7 @@ def train(
     worker_id = int(os.environ.get("WORKER_ID", 0))
     device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
 
-    logger = CSVLogger(fieldnames=["step", "train_loss", "train_acc", "val_loss", "val_acc"], log_dir=run_dir)
+    logger = CSVLogger(fieldnames=["step", "train_loss", "train_acc", "val_loss", "val_acc"], log_dir=run_dir, overwrite=False)
 
     train_loader = CIFAR10Dataset(batch_size=batch_size, train=True, device=device, root=data_dir)
     test_loader = CIFAR10Dataset(batch_size=batch_size, train=False, device=device, root=data_dir)
@@ -127,7 +127,8 @@ if __name__ == "__main__":
     n_workers = int(os.environ["N_WORKERS"])
 
     widths = [2, 8, 16, 32, 64, 128, 256, 512]
-    lrs = np.power(10, np.linspace(-6, -1, num=32)).tolist()
+    lrs = np.power(10, np.linspace(-6, -2, num=16)).tolist()
+    N_REPETITIONS = 4  # for confidence intervals
 
     for w_id, w in enumerate(widths):
         for lr_id, lr in enumerate(lrs):
@@ -143,4 +144,5 @@ if __name__ == "__main__":
                     opt_config["lr"] = lr
                     return opt_config
 
-                main(f"mlp_3layer_hiddenw_{w}_lr_{lr}", mlp_w, adamw_lr, training_base)
+                for _ in range(N_REPETITIONS):  # overwrite=False in CSVLogger so timestamp included
+                    main(f"mlp_3layer_hiddenw_{w}_lr_{lr}", mlp_w, adamw_lr, training_base)
