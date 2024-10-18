@@ -1,19 +1,19 @@
 import os
-import datetime
 import csv
+import datetime
+import json
 
 import torch
 import torch.nn.functional as F
 
-from model import CNN
 from config import base_training, base_model, base_optimizer
 from data import CIFAR10Dataset
 
 
 class CSVLogger:
-    def __init__(self, run_name=None, fieldnames=None, log_dir="./logs"):
+    def __init__(self, fieldnames=None, log_dir="./logs", overwrite=True):
         os.makedirs(log_dir, exist_ok=True)
-        self.file = open(os.path.join(log_dir, f"{run_name or datetime.now().strftime('run_%Y%m%d_%H%M%S')}.csv"), 'w', newline='')
+        self.file = open(os.path.join(log_dir, f"{'metrics' if overwrite else datetime.now().strftime('metrics_%Y%m%d_%H%M%S')}.csv"), 'w', newline='')
         self.writer = csv.DictWriter(self.file, fieldnames=fieldnames)
         self.writer.writeheader()
 
@@ -54,7 +54,6 @@ def evaluate(model, test_dataloader, n_steps):
 
 
 def train(
-        run_name,
         model_config, optimizer_config,
         batch_size, 
         n_train_steps, n_eval_steps,
@@ -64,19 +63,15 @@ def train(
     ):
     torch.manual_seed(seed)
 
-    run_name = "test_cifar"
-    logger = CSVLogger(run_name=run_name, fieldnames=["step", "train_loss", "train_acc", "val_loss", "val_acc"], log_dir=run_dir)
+    logger = CSVLogger(fieldnames=["step", "train_loss", "train_acc", "val_loss", "val_acc"], log_dir=run_dir)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     train_loader = CIFAR10Dataset(batch_size=batch_size, train=True, device=device, root=data_dir)
     test_loader = CIFAR10Dataset(batch_size=batch_size, train=False, device=device, root=data_dir)
 
-    # model = CNN(n_layers=3, hidden_channels=128)
     model = model_config().build()
     model = model.to(device)
-    print(f"model has {sum([p.numel() for p in model.parameters()])} parameters")
 
-    # opt = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
     opt = optimizer_config().build(params=model.parameters())
 
     s = 0
@@ -104,10 +99,25 @@ def train(
     logger.log(step=s, train_loss=stats_train["loss"], train_acc=stats_train["accuracy"], val_loss=stats_val["loss"], val_acc=stats_val["accuracy"])
 
 
-if __name__ == "__main__":
-    run_name = "test_cifar"
-    model_config = base_model
-    optimizer_config = base_optimizer
+def main(run_name, model_config, optimizer_config, training_config):
+    run_dir = os.path.join("./runs", run_name)
+    os.makedirs(run_dir, exist_ok=True)
+    configs = {
+        "training": training_config,
+        "model": model_config,
+        "optimizer": optimizer_config
+    }
+    for config_name, config in configs.items():
+        config_path = os.path.join(run_dir, f"{config_name}_config.json")
+        with open(config_path, "w") as f:
+            json.dump(config().init_params, f, indent=4)
 
-    # train()
-    base_training().build(run_name=run_name, model_config=model_config, optimizer_config=optimizer_config)
+    training_config().build(
+        model_config=model_config, 
+        optimizer_config=optimizer_config,
+        run_dir=os.path.join("./runs", run_name),
+    )
+
+
+if __name__ == "__main__":
+    main("test_cifar", base_model, base_optimizer, base_training)
