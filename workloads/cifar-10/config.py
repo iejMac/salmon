@@ -5,6 +5,12 @@ class Config:
         self.obj = obj
         self.init_params = params
 
+    def __getitem__(self, key):
+        return self.init_params[key]
+
+    def __setitem__(self, key, value):
+        self.init_params[key] = value
+
     def build(self, **more_params):
         params = {**self.init_params, **more_params}
         return self.obj(**params)
