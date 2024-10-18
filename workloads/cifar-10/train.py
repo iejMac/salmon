@@ -64,8 +64,8 @@ def train(
     ):
     torch.manual_seed(seed)
 
-    worker_id = os.environ.get("WORKER_ID", 0)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    worker_id = int(os.environ.get("WORKER_ID", 0))
+    device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
 
     logger = CSVLogger(fieldnames=["step", "train_loss", "train_acc", "val_loss", "val_acc"], log_dir=run_dir)
 
@@ -127,12 +127,12 @@ if __name__ == "__main__":
     n_workers = int(os.environ["N_WORKERS"])
 
     N = 40
-    widths = [8 + 4*i for i in range(N)]
+    widths = [32 + 8*i for i in range(N)]
     lrs = np.logspace(np.log10(1e-4), np.log10(1e-1), num=N).tolist()
 
     for w_id, w in enumerate(widths):
         for lr_id, lr in enumerate(lrs):
-            exp_id = lr_id + N * w_id
+            exp_id = w_id
             if exp_id % n_workers == worker_id:
 
                 def mlp_w():

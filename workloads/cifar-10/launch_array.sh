@@ -14,7 +14,7 @@ N_WORKERS=$1
 for ((i=0; i<N_WORKERS; i++))
 do
   GPU_ID=$((i % 8))
-  echo Running worker $WORKER_ID on $GPU_ID
+  echo Running worker $i on $GPU_ID
   CUDA_VISIBLE_DEVICES=$GPU_ID WORKER_ID=$i N_WORKERS=$N_WORKERS python train.py &
 done
 

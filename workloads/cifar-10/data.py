@@ -14,15 +14,15 @@ class CIFAR10Dataset:
         self.transform = transforms.Normalize(CIFAR_MEAN, CIFAR_STD)
         dataset = torchvision.datasets.CIFAR10(root=root, train=train, download=True)
         self.X = (torch.tensor(dataset.data).float() / 255).permute(0, 3, 1, 2)
-        self.Y = torch.tensor(dataset.targets)
+        self.X = self.transform(self.X).view(self.X.shape[0], -1).to(device)
+        self.Y = torch.tensor(dataset.targets).to(device)
 
     def __iter__(self):
         while True:
             idx = torch.randint(0, self.X.shape[0], (self.batch_size,))
-            X = self.transform(self.X[idx])
-            X = X.view(X.shape[0], -1)  # flatten for MLP
+            X = self.X[idx]
             y = self.Y[idx]
-            yield X.to(self.device), y.to(self.device)
+            yield X, y
 
 
 if __name__ == "__main__":

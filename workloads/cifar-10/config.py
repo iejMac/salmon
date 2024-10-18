@@ -42,7 +42,7 @@ def training_base():
         obj=train,
         params={
             "seed": 0,
-            "batch_size": 128,
+            "batch_size": 1024,
             "n_train_steps": N_STEPS,
             "n_eval_steps": 32,
             "eval_freq": N_STEPS // 100,
