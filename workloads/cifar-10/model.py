@@ -2,23 +2,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class CNN(nn.Module):
-    def __init__(self, n_layers=3, hidden_channels=64):
-        super(CNN, self).__init__()
+class MLP(nn.Module):
+    def __init__(self, dims, bias=False):
+        super(MLP, self).__init__()
+        self.n_layers = len(dims) - 1
+        self.layers = nn.ModuleList([nn.Linear(dims[i], dims[i+1], bias=bias) for i in range(len(dims) - 1)])
 
-        assert n_layers >= 3, "n_layers must be at least 3 (input layer, hidden layers, and output layer)"
-
-        layers = [nn.Conv2d(in_channels=3, out_channels=hidden_channels, kernel_size=3, padding=1)]
-        for _ in range(n_layers - 2):
-            layers.append(nn.Conv2d(in_channels=hidden_channels, out_channels=hidden_channels, kernel_size=3, padding=1))
-        layers.append(nn.Conv2d(in_channels=hidden_channels, out_channels=10, kernel_size=3, padding=1))
-        self.layers = nn.ModuleList(layers)
-        
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-        
     def forward(self, x):
-        for layer in self.layers:
-            x = F.relu(layer(x))
-        x = self.global_pool(x)
-        x = torch.flatten(x, 1)  # Flatten to (batch_size, num_classes)
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            if i < self.n_layers - 1:
+                x = F.relu(x)
         return x
+
+if __name__ == "__main__":
+    mod = MLP([2, 4, 8])
+    x = torch.randn(2)
+    y = mod(x)

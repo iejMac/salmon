@@ -1,4 +1,4 @@
-
+"""general config class."""
 
 class Config:
     def __init__(self, obj, params={}):
@@ -16,27 +16,26 @@ class Config:
         return self.obj(**params)
 
 
-def base_model():
-    from model import CNN
+def mlp_base():
+    from model import MLP
     return Config(
-        obj=CNN,
+        obj=MLP,
         params={
-            "n_layers": 3,
-            "hidden_channels": 128,
+            "dims": [3*32*32, 10, 10],
+            "bias": False,
         },
     )
 
-def base_optimizer():
+def adamw_base():
     from torch.optim import AdamW
     return Config(
         obj=AdamW,
         params={
             "lr": 1e-3,
-            "weight_decay": 1e-2,
         },
     )
 
-def base_training():
+def training_base():
     from train import train
     N_STEPS = 5000
     return Config(

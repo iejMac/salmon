@@ -5,8 +5,9 @@ import json
 
 import torch
 import torch.nn.functional as F
+import numpy as np
 
-from config import base_training, base_model, base_optimizer
+from config import mlp_base, adamw_base, training_base
 from data import CIFAR10Dataset
 
 
@@ -63,9 +64,11 @@ def train(
     ):
     torch.manual_seed(seed)
 
+    worker_id = os.environ.get("WORKER_ID", 0)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     logger = CSVLogger(fieldnames=["step", "train_loss", "train_acc", "val_loss", "val_acc"], log_dir=run_dir)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     train_loader = CIFAR10Dataset(batch_size=batch_size, train=True, device=device, root=data_dir)
     test_loader = CIFAR10Dataset(batch_size=batch_size, train=False, device=device, root=data_dir)
 
@@ -120,4 +123,25 @@ def main(run_name, model_config, optimizer_config, training_config):
 
 
 if __name__ == "__main__":
-    main("test_cifar", base_model, base_optimizer, base_training)
+    worker_id = int(os.environ["WORKER_ID"])
+    n_workers = int(os.environ["N_WORKERS"])
+
+    N = 40
+    widths = [8 + 4*i for i in range(N)]
+    lrs = np.logspace(np.log10(1e-4), np.log10(1e-1), num=N).tolist()
+
+    for w_id, w in enumerate(widths):
+        for lr_id, lr in enumerate(lrs):
+            exp_id = lr_id + N * w_id
+            if exp_id % n_workers == worker_id:
+
+                def mlp_w():
+                    model_config = mlp_base()
+                    model_config["dims"][1] = w
+                    return model_config
+                def adamw_lr():
+                    opt_config = adamw_base()
+                    opt_config["lr"] = lr
+                    return opt_config
+
+                main(f"mlp_3layer_hiddenw_{w}_lr_{lr}", mlp_w, adamw_lr, training_base)

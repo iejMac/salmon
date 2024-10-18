@@ -20,6 +20,7 @@ class CIFAR10Dataset:
         while True:
             idx = torch.randint(0, self.X.shape[0], (self.batch_size,))
             X = self.transform(self.X[idx])
+            X = X.view(X.shape[0], -1)  # flatten for MLP
             y = self.Y[idx]
             yield X.to(self.device), y.to(self.device)
 
