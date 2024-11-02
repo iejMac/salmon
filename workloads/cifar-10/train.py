@@ -7,8 +7,10 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from config import mlp_base, adamw_base, training_base
+from config import mlp_base, adamw_base, sgd_base, training_base
 from data import CIFAR10Dataset
+
+from model import standard_parametrization, spectral_parameterization
 
 
 class CSVLogger:
@@ -75,7 +77,9 @@ def train(
     model = model_config().build()
     model = model.to(device)
 
-    opt = optimizer_config().build(params=model.parameters())
+    # opt = optimizer_config().build(params=model.parameters())
+    # opt = optimizer_config().build(params=standard_parametrization(model))
+    opt = optimizer_config().build(params=spectral_parameterization(model))
 
     s = 0
     for X, y in train_loader:
@@ -123,26 +127,35 @@ def main(run_name, model_config, optimizer_config, training_config):
 
 
 if __name__ == "__main__":
-    worker_id = int(os.environ["WORKER_ID"])
-    n_workers = int(os.environ["N_WORKERS"])
+    worker_id = int(os.environ.get("WORKER_ID", 0))
+    n_workers = int(os.environ.get("N_WORKERS", 1))
 
-    widths = [2, 8, 16, 32, 64, 128, 256, 512]
-    lrs = np.power(10, np.linspace(-6, -2, num=16)).tolist()
+    widths = [128, 256, 512]
+    # lrs = np.power(10, np.linspace(-2.5, -1.0, num=16)).tolist()
+    lrs = np.power(10, np.linspace(-2.0, -1.0, num=8)).tolist()
     N_REPETITIONS = 4  # for confidence intervals
+
+    widths = widths[:1]
+    lrs = lrs[:1]
+    N_REPETITIONS = 1
 
     for w_id, w in enumerate(widths):
         for lr_id, lr in enumerate(lrs):
-            exp_id = w_id
+            exp_id = w_id * len(lrs) + lr_id
             if exp_id % n_workers == worker_id:
-
                 def mlp_w():
                     model_config = mlp_base()
                     model_config["dims"][1] = w
                     return model_config
-                def adamw_lr():
-                    opt_config = adamw_base()
+                def sgd_lr():
+                    opt_config = sgd_base()
                     opt_config["lr"] = lr
                     return opt_config
 
-                for _ in range(N_REPETITIONS):  # overwrite=False in CSVLogger so timestamp included
-                    main(f"mlp_3layer_hiddenw_{w}_lr_{lr}", mlp_w, adamw_lr, training_base)
+                for r in range(N_REPETITIONS):  # overwrite=False in CSVLogger so timestamp included
+                    def seeded_training_base():
+                        training_config = training_base()
+                        training_config["seed"] = training_config["seed"] + r
+                        return training_config
+
+                    main(f"mlp_3layer_hiddenw_{w}_lr_{lr}", mlp_w, sgd_lr, seeded_training_base)

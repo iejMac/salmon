@@ -35,6 +35,15 @@ def adamw_base():
         },
     )
 
+def sgd_base():
+    from torch.optim import SGD
+    return Config(
+        obj=SGD,
+        params={
+            "lr": 1e-3,
+        },
+    )
+
 def training_base():
     from train import train
     N_STEPS = 5000
@@ -42,7 +51,7 @@ def training_base():
         obj=train,
         params={
             "seed": 0,
-            "batch_size": 1024,
+            "batch_size": 128,
             "n_train_steps": N_STEPS,
             "n_eval_steps": 32,
             "eval_freq": N_STEPS // 100,
