@@ -10,7 +10,7 @@ import numpy as np
 from config import mlp_base, adamw_base, sgd_base, training_base
 from data import CIFAR10Dataset
 
-from model import standard_parametrization, spectral_parameterization
+from parametrization import standard_parametrization, mu_parametrization
 
 
 class CSVLogger:
@@ -77,9 +77,10 @@ def train(
     model = model_config().build()
     model = model.to(device)
 
-    # opt = optimizer_config().build(params=model.parameters())
-    # opt = optimizer_config().build(params=standard_parametrization(model))
-    opt = optimizer_config().build(params=spectral_parameterization(model))
+    opt_cfg = optimizer_config()
+    # params = standard_parametrization(model, lr_prefactor=opt_cfg['lr'], std_prefactor=1.0)
+    params = mu_parametrization(model, lr_prefactor=opt_cfg['lr'], std_prefactor=1.0)
+    opt = opt_cfg.build(params=params)
 
     s = 0
     for X, y in train_loader:
@@ -117,7 +118,7 @@ def main(run_name, model_config, optimizer_config, training_config):
     for config_name, config in configs.items():
         config_path = os.path.join(run_dir, f"{config_name}_config.json")
         with open(config_path, "w") as f:
-            json.dump(config().init_params, f, indent=4)
+            json.dump(config().get_params(), f, indent=4)
 
     training_config().build(
         model_config=model_config, 
@@ -130,14 +131,9 @@ if __name__ == "__main__":
     worker_id = int(os.environ.get("WORKER_ID", 0))
     n_workers = int(os.environ.get("N_WORKERS", 1))
 
-    widths = [128, 256, 512]
-    # lrs = np.power(10, np.linspace(-2.5, -1.0, num=16)).tolist()
-    lrs = np.power(10, np.linspace(-2.0, -1.0, num=8)).tolist()
+    widths = [256, 512, 1024, 2048]
+    lrs = np.power(10, np.linspace(-2.0, -1.0, num=16)).tolist()
     N_REPETITIONS = 4  # for confidence intervals
-
-    widths = widths[:1]
-    lrs = lrs[:1]
-    N_REPETITIONS = 1
 
     for w_id, w in enumerate(widths):
         for lr_id, lr in enumerate(lrs):
@@ -146,6 +142,7 @@ if __name__ == "__main__":
                 def mlp_w():
                     model_config = mlp_base()
                     model_config["dims"][1] = w
+                    model_config["dims"][2] = w
                     return model_config
                 def sgd_lr():
                     opt_config = sgd_base()
