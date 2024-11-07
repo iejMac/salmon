@@ -86,7 +86,7 @@ def sgd_frac():
 def mean_field_parametrization():
     from parametrization import abc_parametrization
     # NOTE: overfit to mlp1h model config
-    al, bl, cl = [0.0, 0.5], [0.0, 0.0], [-1.0, -1.0] # mean field
+    al, bl, cl = [0.0, 1.0], [0.0, 0.0], [-1.0, -1.0] # mean field
     return Config(
         obj=abc_parametrization,
         params={

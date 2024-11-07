@@ -4,13 +4,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from scipy.interpolate import griddata
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+import multiprocessing
 
 # Parameters
-runs_dir = "./runs"  # Directory where runs are saved
-visualizations_dir = "./figures"  # Directory to save visualizations
-output_image = os.path.join(visualizations_dir, "convergence_visualization.png")
-output_array = os.path.join(visualizations_dir, "convergence_grid.npy")
-max_val = 1e6  # Threshold for divergence
+runs_dir = "./runs"
+visualizations_dir = "./figures"
+exp_name = "mf_c0.0,2.0_R256"
+output_image = os.path.join(visualizations_dir, f"{exp_name}.png")
+output_array = os.path.join(visualizations_dir, f"{exp_name}.npy")
+max_val = 1e6
 
 def load_parametrization_config(run_dir):
     """Load the parametrization config to retrieve `cl` values."""
@@ -19,138 +23,155 @@ def load_parametrization_config(run_dir):
         config = json.load(f)
     return config["cl"]
 
-def load_metrics(run_dir):
-    """Load the binary loss file to get the training loss values."""
-    metrics_path = os.path.join(run_dir, "losses.npy")
+def load_metrics(run_dir, metric_filename):
+    """Load the binary metric file to get the training metric values."""
+    metrics_path = os.path.join(run_dir, metric_filename)
     if os.path.exists(metrics_path):
-        losses = np.load(metrics_path)
-        return losses
+        # Use memory mapping for large files
+        return np.load(metrics_path, mmap_mode='r')
     return None
 
-def convergence_measure(losses, max_val=1e6):
+def convergence_measure(metrics, metric_type, max_val=1e6):
     """Calculate convergence measure to determine divergence or convergence."""
-    losses = np.nan_to_num(losses, nan=max_val, posinf=max_val, neginf=max_val)
-    losses /= losses[0] if losses[0] != 0 else 1
-    losses = np.clip(losses, -max_val, max_val)
+    # Convert memory-mapped array to regular array only for the required calculations
+    if hasattr(metrics, 'compute'): 
+        metrics = np.array(metrics)
 
-    converged = np.mean(losses[-20:]) < 1
-    return -np.sum(losses) if converged else np.sum(1 / losses)
+    if metric_type == "losses":
+        metrics = np.nan_to_num(metrics, nan=max_val, posinf=max_val, neginf=-max_val)
+        metrics = metrics / (metrics[0] if metrics[0] != 0 else 1)
+        metrics = np.clip(metrics, -max_val, max_val)
+        converged = np.mean(metrics[-20:]) < 1
+        return -np.sum(metrics) if converged else np.sum(1 / metrics)
+    else:  # log_norm_delta_features
+        valid_metrics = metrics[np.isfinite(metrics)]
+        mean_exponent = valid_metrics.mean()
+        return -mean_exponent
 
-def collect_run_data(runs_dir):
-    """Collects data for each run and organizes by cl1 and cl2 values."""
-    run_data = []
+def process_single_run(args):
+    """Process a single run directory - used for parallel processing."""
+    run_dir, metric_filename = args
+    if not os.path.isdir(run_dir):
+        return None
 
-    for run_name in os.listdir(runs_dir):
-        run_dir = os.path.join(runs_dir, run_name)
-        if not os.path.isdir(run_dir):
-            continue
-
+    try:
         cl = load_parametrization_config(run_dir)
-        cl1, cl2 = cl[0], cl[1]
+        metrics = load_metrics(run_dir, metric_filename)
+        
+        if metrics is not None:
+            metric_type = metric_filename[:-4]
+            convergence_value = convergence_measure(metrics, metric_type, max_val=max_val)
+            return (cl[0], cl[1], convergence_value)
+    except Exception as e:
+        print(f"Error processing {run_dir}: {str(e)}")
+        return None
 
-        losses = load_metrics(run_dir)
-        if losses is not None:
-            convergence_value = convergence_measure(losses, max_val=max_val)
-            run_data.append((cl1, cl2, convergence_value))
-
-    return run_data
-
-def extract_edges(X):
-    """Detect edges as sign changes, identifying regions of convergence and divergence."""
-    Y = np.stack((X[1:,1:], X[:-1,1:], X[1:,:-1], X[:-1,:-1]), axis=-1)
-    Z = np.sign(np.max(Y, axis=-1) * np.min(Y, axis=-1))
-    return Z < 0  # Edges occur where there's a sign change
+def collect_run_data_parallel(runs_dir, metric_filename):
+    """Collects data for each run in parallel."""
+    run_dirs = [os.path.join(runs_dir, d) for d in os.listdir(runs_dir)]
+    args = [(run_dir, metric_filename) for run_dir in run_dirs]
+    
+    # Use number of CPU cores minus 1 to avoid overloading the system
+    num_workers = max(1, multiprocessing.cpu_count() - 1)
+    
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        results = list(executor.map(process_single_run, args))
+    
+    # Filter out None results and convert to list
+    return [r for r in results if r is not None]
 
 def cdf_img(x, x_ref, buffer=0.25):
     """Rescale x relative to x_ref, emphasizing intensity with a buffer."""
     x_flat = x_ref.ravel()
     u = np.sort(x_flat[~np.isnan(x_flat)])
+    
+    # Vectorized operations for better performance
     num_neg = np.sum(u < 0)
-    num_nonneg = u.shape[0] - num_neg
-
-    # Adjust buffer to create more intensity contrast
-    v = np.concatenate(
-        (np.linspace(-1, -buffer, num_neg), np.linspace(buffer, 1, num_nonneg)),
-        axis=0
-    )
-    y = np.interp(x, u, v)
-    return -y  # Flip sign for enhanced visual contrast
+    num_nonneg = len(u) - num_neg
+    
+    v = np.concatenate([
+        np.linspace(-1, -buffer, num_neg),
+        np.linspace(buffer, 1, num_nonneg)
+    ])
+    
+    return -np.interp(x, u, v)
 
 def create_square_grid(run_data):
-    cl1_vals = np.array([d[0] for d in run_data])
-    cl2_vals = np.array([d[1] for d in run_data])
-    convergence_values = np.array([d[2] for d in run_data])
-
-    # Define the grid dimensions
+    """Create interpolated square grid from run data."""
+    data = np.array(run_data)
+    cl1_vals, cl2_vals, convergence_values = data.T
+    
     grid_size = max(len(set(cl1_vals)), len(set(cl2_vals)))
-
-    # Create a square grid
+    
+    # Create grid points using vectorized operations
     cl1_grid = np.linspace(cl1_vals.min(), cl1_vals.max(), grid_size)
     cl2_grid = np.linspace(cl2_vals.min(), cl2_vals.max(), grid_size)
     grid_cl1, grid_cl2 = np.meshgrid(cl1_grid, cl2_grid)
-
-    # Interpolate the convergence values onto the square grid
+    
     grid_convergence = griddata(
         (cl1_vals, cl2_vals),
         convergence_values,
         (grid_cl1, grid_cl2),
         method='linear'
     )
-
+    
     return grid_cl1, grid_cl2, grid_convergence
 
-def create_convergence_image(run_data, output_image, output_array):
-    """Create and save a high-contrast image with edge detection for convergence visualization."""
-    # Create the visualizations directory if it doesn't exist
-    if not os.path.exists(visualizations_dir):
-        os.makedirs(visualizations_dir)
+def create_convergence_images(run_data_losses, run_data_features, output_image, output_array):
+    """Create and save visualization with both metrics."""
+    os.makedirs(visualizations_dir, exist_ok=True)
 
-    # Create a square grid and interpolate the data
-    grid_cl1, grid_cl2, grid_convergence = create_square_grid(run_data)
+    # Process both metrics in parallel using ThreadPoolExecutor
+    with ProcessPoolExecutor(max_workers=2) as executor:
+        future_losses = executor.submit(create_square_grid, run_data_losses)
+        future_features = executor.submit(create_square_grid, run_data_features)
+        
+        grid_cl1, grid_cl2, grid_convergence_losses = future_losses.result()
+        _, _, grid_convergence_features = future_features.result()
 
-    # Apply cdf_img transformation
-    rescaled_values = cdf_img(grid_convergence, grid_convergence)
+    # Transform and handle NaNs
+    rescaled_values_losses = np.nan_to_num(cdf_img(grid_convergence_losses, grid_convergence_losses), nan=0.0)
+    rescaled_values_features = np.nan_to_num(cdf_img(grid_convergence_features, grid_convergence_features), nan=0.0)
 
-    # Handle NaNs that may result from interpolation
-    rescaled_values = np.nan_to_num(rescaled_values, nan=0.0)
-
-    # Apply edge detection
-    edge_map = extract_edges(rescaled_values)
-
-    # Use Normalize to apply high-contrast color mapping with `Spectral` colormap
+    # Create visualization
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
     norm = Normalize(vmin=-1, vmax=1)
 
-    # Plot with edge overlay and save
-    plt.figure(figsize=(6, 6))  # Set figure size to be square
-    plt.imshow(
-        rescaled_values,
-        origin='lower',
-        extent=(grid_cl1.min(), grid_cl1.max(), grid_cl2.min(), grid_cl2.max()),
-        cmap='Spectral',
-        norm=norm,
-        interpolation='nearest',
-        aspect='equal'  # Set aspect ratio to 'equal'
-    )
-    # plt.colorbar(label="Convergence Metric")
+    for ax, data, title in zip(
+        axes,
+        [rescaled_values_losses, rescaled_values_features],
+        ["convergence", "feature_learning"]
+    ):
+        im = ax.imshow(
+            data,
+            origin='lower',
+            extent=(grid_cl1.min(), grid_cl1.max(), grid_cl2.min(), grid_cl2.max()),
+            cmap='Spectral',
+            norm=norm,
+            interpolation='nearest',
+            aspect='equal'
+        )
+        ax.set_xlabel("cl1")
+        ax.set_ylabel("cl2")
+        ax.set_title(title)
 
-    # Overlay edges in black to emphasize boundaries
-    # plt.imshow(
-    #     edge_map,
-    #     origin='lower',
-    #     extent=(grid_cl1.min(), grid_cl1.max(), grid_cl2.min(), grid_cl2.max()),
-    #     cmap='gray',
-    #     alpha=0.5,
-    #     interpolation='nearest',
-    #     aspect='equal'
-    # )
-
-    plt.xlabel("cl1")
-    plt.ylabel("cl2")
-    plt.savefig(output_image, dpi=300)
-    plt.show()
-    np.save(output_array, rescaled_values)
-    print(f"saved convergence visualization to {output_image}")
+    plt.tight_layout()
+    plt.savefig(output_image, dpi=300, bbox_inches='tight')
+    
+    # Save arrays in parallel
+    with ProcessPoolExecutor(max_workers=2) as executor:
+        executor.submit(np.save, output_array.replace('.npy', '_losses.npy'), rescaled_values_losses)
+        executor.submit(np.save, output_array.replace('.npy', '_features.npy'), rescaled_values_features)
+    
+    print(f"Saved convergence visualization to {output_image}")
 
 if __name__ == "__main__":
-    run_data = collect_run_data(runs_dir)
-    create_convergence_image(run_data, output_image, output_array)
+    # Collect data for both metrics in parallel
+    with ProcessPoolExecutor(max_workers=2) as executor:
+        future_losses = executor.submit(collect_run_data_parallel, runs_dir, "losses.npy")
+        future_features = executor.submit(collect_run_data_parallel, runs_dir, "log_norm_delta_features.npy")
+        
+        run_data_losses = future_losses.result()
+        run_data_features = future_features.result()
+
+    create_convergence_images(run_data_losses, run_data_features, output_image, output_array)
