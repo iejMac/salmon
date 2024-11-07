@@ -135,35 +135,31 @@ def main(run_name, model_config, optimizer_config, training_config, parametrizat
 from config import mlp1h, sgd_frac, training_frac, mean_field_parametrization
 
 if __name__ == "__main__":
-    # Set grid resolution for epsilon adjustments
-    RESOLUTION = 64 # Define how many steps per axis in the grid
+    # Set grid resolution for adjustments
+    RESOLUTION = 512  # Define how many steps per axis in the grid
 
     # Get worker ID and number of workers from environment variables
     worker_id = int(os.environ.get("WORKER_ID", 0))
     n_workers = int(os.environ.get("N_WORKERS", 1))
 
-    # Define the grid for epsilon adjustments based on the resolution
-    # epsilon_grid_1 = np.linspace(-1.0, 1.0, num=RESOLUTION)
-    # epsilon_grid_2 = np.linspace(-1.0, 1.0, num=RESOLUTION)
-    epsilon_grid_1 = np.linspace(-1.0, 1.0, num=RESOLUTION)
-    epsilon_grid_2 = np.linspace(-2.25, 0.25, num=RESOLUTION)
+    # Define the grid for c1 and c2 based on the ranges from epsilon adjustments
+    c1_grid = np.linspace(-1.5, 0.5, num=RESOLUTION)
+    c2_grid = np.linspace(-3.4, -1.4, num=RESOLUTION)
 
     # Loop over the grid, assigning tasks based on `exp_id`
-    for e1_id, epsilon1 in enumerate(epsilon_grid_1):
-        for e2_id, epsilon2 in enumerate(epsilon_grid_2):
+    for c1_id, c1 in enumerate(c1_grid):
+        for c2_id, c2 in enumerate(c2_grid):
             # Calculate unique experiment ID based on grid indices
-            exp_id = e1_id * len(epsilon_grid_2) + e2_id
+            exp_id = c1_id * len(c2_grid) + c2_id
             if exp_id % n_workers == worker_id:
                 # Define parametrization configuration with the modified `cl` values
                 def mean_field_parametrization_with_diff_cl():
                     mf_cfg = mean_field_parametrization()
-                    # Calculate diff_cl by adjusting the default `cl` values with `epsilon`
-                    diff_cl = [c + e for c, e in zip(mf_cfg['cl'], [epsilon1, epsilon2])]
-                    mf_cfg['cl'] = diff_cl
+                    mf_cfg['cl'] = [c1, c2]
                     return mf_cfg
 
                 # Create a unique run name for each experiment (careful about precision!)
-                run_name = f"frac_test_eps1_{epsilon1:.10f}_eps2_{epsilon2:.10f}"
+                run_name = f"frac_test_c1_{c1:.10f}_c2_{c2:.10f}"
 
                 # Run the experiment and measure execution time
                 t0 = time.time()
