@@ -24,6 +24,24 @@ class CIFAR10Dataset:
             y = self.Y[idx]
             yield X, y
 
+class SyntheticNormalDataset:
+    def __init__(self, batch_size, n=16, device="cpu", dataset_size=None):
+        self.batch_size = batch_size
+        self.device = device
+        self.n = n
+        self.dataset_size = dataset_size or (n ** 2 + n)  # Default size as per the paper
+
+        # Generate synthetic data and labels from N(0, 1)
+        self.X = torch.randn(self.dataset_size, n).to(device)
+        self.Y = torch.randn(self.dataset_size, 1).to(device)
+
+    def __iter__(self):
+        while True:
+            idx = torch.randint(0, self.X.shape[0], (self.batch_size,))
+            X = self.X[idx]
+            y = self.Y[idx]
+            yield X, y
+
 
 if __name__ == "__main__":
     ds = CIFAR10Dataset(4, True)

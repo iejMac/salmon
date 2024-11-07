@@ -18,7 +18,7 @@ class Config:
         params = {**self.init_params, **more_params}
         return self.obj(**params)
 
-
+# CIFAR-10 training:
 def mlp_base():
     from model import MLP
     return Config(
@@ -59,6 +59,53 @@ def training_base():
             "n_eval_steps": 32,
             "eval_freq": N_STEPS // 100,
             "log_freq": N_STEPS // 500,
+        },
+    )
+
+# Fractals:
+N_FRAC = 16
+def mlp1h():
+    from model import MLP
+    return Config(
+        obj=MLP,
+        params={
+            "dims": [N_FRAC, N_FRAC, 1],
+            "bias": False,
+        },
+    )
+
+def sgd_frac():
+    from torch.optim import SGD
+    return Config(
+        obj=SGD,
+        params={
+            "lr": 1e-2,
+        },
+    )
+
+def mean_field_parametrization():
+    from parametrization import abc_parametrization
+    # NOTE: overfit to mlp1h model config
+    al, bl, cl = [0.0, 0.5], [0.0, 0.0], [-1.0, -1.0] # mean field
+    return Config(
+        obj=abc_parametrization,
+        params={
+            "al": al,
+            "bl": bl,
+            "cl": cl,
+        }
+    )
+
+def training_frac():
+    from fractal import train
+    N_STEPS = 100 # 500 # 1000
+    return Config(
+        obj=train,
+        params={
+            "seed": 0,
+            "batch_size": N_FRAC ** 2 + N_FRAC,  # full batch GD for nonlinear networks
+            "n_train_steps": N_STEPS,
+            "log_freq": 1,
         },
     )
 
