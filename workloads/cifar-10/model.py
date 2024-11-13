@@ -16,7 +16,8 @@ class MLP(nn.Module):
             x *= self.layer_multipliers[i]
 
             if i < self.n_layers - 1:
-                x = F.relu(x)
+                # x = F.relu(x)
+                x = F.tanh(x)
         return x
 
 

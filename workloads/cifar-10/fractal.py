@@ -88,6 +88,7 @@ def train(
             diverged = True  # Set flag to stop further computation
             logger.losses[s:] = loss_item  # Fill remaining steps with inf
             logger.log_norm_delta_features[s:] = np.nan
+            print("Exiting early due to divergence...")
             break
 
         if s % log_freq == 0:
@@ -112,7 +113,8 @@ def train(
     logger.save()
 
 def main(run_name, model_config, optimizer_config, training_config, parametrization_config):
-    run_dir = os.path.join("./runs", run_name)
+    # run_dir = os.path.join("./runs", run_name)
+    run_dir = os.path.join("/app/maciej/junk/fractal/runs", run_name)
     os.makedirs(run_dir, exist_ok=True)
     configs = {
         # "training": training_config,
@@ -136,15 +138,37 @@ from config import mlp1h, sgd_frac, training_frac, mean_field_parametrization
 
 if __name__ == "__main__":
     # Set grid resolution for adjustments
-    RESOLUTION = 512  # Define how many steps per axis in the grid
+    RESOLUTION = 8  # Define how many steps per axis in the grid
 
     # Get worker ID and number of workers from environment variables
     worker_id = int(os.environ.get("WORKER_ID", 0))
     n_workers = int(os.environ.get("N_WORKERS", 1))
 
-    # Define the grid for c1 and c2 based on the ranges from epsilon adjustments
-    c1_grid = np.linspace(-1.5, 0.5, num=RESOLUTION)
-    c2_grid = np.linspace(-3.4, -1.4, num=RESOLUTION)
+    # zoom0
+    # c1_grid = np.linspace(-1.5, 0.5, num=RESOLUTION)
+    # c2_grid = np.linspace(-3.4, -1.4, num=RESOLUTION)
+    # zoom1
+    # c1_grid = np.linspace(-0.65, -0.15, num=RESOLUTION)
+    # c2_grid = np.linspace(-2.65, -2.15, num=RESOLUTION)
+    # zoom2
+    # c1_grid = np.linspace(-0.3, -0.2, num=RESOLUTION)
+    # c2_grid = np.linspace(-2.55, -2.45, num=RESOLUTION)
+    # zoom3
+    # c1_grid = np.linspace(-0.255, -0.245, num=RESOLUTION)
+    # c2_grid = np.linspace(-2.495, -2.485, num=RESOLUTION)
+    # zoom4
+    # c1_grid = np.linspace(-0.2501, -0.2499, num=RESOLUTION)
+    # c2_grid = np.linspace(-2.4902, -2.4900, num=RESOLUTION)
+
+    # zoom0 tanh
+    # c1_grid = np.linspace(-0.5, 0.5, num=RESOLUTION)
+    # c2_grid = np.linspace(-4.0, -3.0, num=RESOLUTION)
+    # zoom1 tanh
+    # c1_grid = np.linspace(-0.30, -0.15, num=RESOLUTION)
+    # c2_grid = np.linspace(-3.55, -3.4, num=RESOLUTION)
+    # zoom2 tanh
+    c1_grid = np.linspace(-0.30, -0.22, num=RESOLUTION)
+    c2_grid = np.linspace(-3.50, -3.47, num=RESOLUTION)
 
     # Loop over the grid, assigning tasks based on `exp_id`
     for c1_id, c1 in enumerate(c1_grid):
@@ -159,7 +183,7 @@ if __name__ == "__main__":
                     return mf_cfg
 
                 # Create a unique run name for each experiment (careful about precision!)
-                run_name = f"frac_test_c1_{c1:.10f}_c2_{c2:.10f}"
+                run_name = f"frac_test_c1_{c1:.14f}_c2_{c2:.14f}"
 
                 # Run the experiment and measure execution time
                 t0 = time.time()

@@ -12,9 +12,9 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
 
 # Parameters
-runs_dir = "./runs"
+runs_dir = "/app/maciej/junk/fractal/runs"
 visualizations_dir = "./figures"
-exp_name = "mf_c_zoom2_R512"
+exp_name = "mf_tanh_c_zoom2_R512"
 output_image = os.path.join(visualizations_dir, f"{exp_name}.png")
 output_array = os.path.join(visualizations_dir, f"{exp_name}.npy")
 max_val = 1e6
@@ -146,7 +146,8 @@ def create_convergence_images(run_data_losses, run_data_features, output_image, 
             cmap='Spectral',
             norm=norm,
             interpolation='nearest',
-            aspect='equal'
+            # aspect='equal'
+            aspect='auto'
         )
         ax.set_xlabel("cl1")
         ax.set_ylabel("cl2")

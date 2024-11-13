@@ -98,7 +98,7 @@ def mean_field_parametrization():
 
 def training_frac():
     from fractal import train
-    N_STEPS = 100 # 500 # 1000
+    N_STEPS = 500 # 1000
     return Config(
         obj=train,
         params={
