@@ -54,7 +54,7 @@ def train(
     metrics = {
         "losses": (1,),
         "rLs": (1,),
-        # "Als": (model.n_layers, 4),  # A_cum, A_alpha, A_omega, A_u
+        "Als": (model.n_layers, 4),  # A_cum, A_alpha, A_omega, A_u
     }
     logger = BinaryLogger(run_dir, n_steps=n_train_steps, metrics=metrics)
 
@@ -189,14 +189,13 @@ def main(run_name, training_config, model_config, optimizer_config, parametrizat
         run_dir=run_dir,
     )
 
-from configs.fractal_config import jascha_grid, mup_a3b3_grid
+from configs.fractal_config import jascha_grid, mup_a3b3_grid, mup_a3b3_eps_grid
 
 if __name__ == "__main__":
     worker_id = int(os.environ.get("WORKER_ID", 0))
     n_workers = int(os.environ.get("N_WORKERS", 1))
 
-    # grid = jascha_grid
-    grid = mup_a3b3_grid
+    grid = mup_a3b3_eps_grid
     for exp_id, run_name, param_args in grid():
         if exp_id % n_workers == worker_id:
             t0 = time.time()

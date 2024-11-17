@@ -64,7 +64,6 @@ def jascha_grid():
 
 # New setup:
 DATA_DIM=2
-# N_FRAC_2 = 16
 N_FRAC_2 = 64
 def mlp2h():
     from model import MLP
@@ -124,42 +123,34 @@ def mup_a3b3_grid():
             run_name = f"mup_a3_{a3:.14f}_b3_{b3:.14f}"
             yield exp_id, run_name, param_args
 
+def mup_a3b3_eps_grid():
+    sp_resolution = 4
+    t_resolution = 11
 
-# def mup_a3b3_grid_w_eps():
-#     sp_resolution = 4
-#     t_resolution = 11
+    a3_grid = np.linspace(-0.5, 1.5, num=sp_resolution)
+    b3_grid = np.linspace(-0.5, 1.5, num=sp_resolution)
+    eps_grid = np.linspace(0.0, 1.0, num=t_resolution)
 
-#     # Define the grids for c1, c2, and eps
-#     a3_grid = np.linspace(-1.5, -0.5, num=sp_resolution)
-#     b3_grid = np.linspace(-1.5, -0.5, num=sp_resolution)
-#     eps_grid = np.linspace(0.0, 1.0, num=t_resolution)  # Generates [0.0, 0.1, ..., 1.0]
+    for a3_id, a3 in enumerate(a3_grid):
+        for b3_id, b3 in enumerate(b3_grid):
+            for eps_id, eps in enumerate(eps_grid):
+                exp_id = (a3_id * len(b3_grid) + b3_id) * len(eps_grid) + eps_id
 
-#     # Iterate over all combinations of c1, c2, and eps
-#     for c1_id, c1 in enumerate(c1_grid):
-#         for c2_id, c2 in enumerate(c2_grid):
-#             for eps_id, eps in enumerate(eps_grid):
-#                 # Compute a unique experiment ID
-#                 exp_id = (c1_id * len(c2_grid) + c2_id) * len(eps_grid) + eps_id
+                def mup_w_diff_a3b3_eps(a3=a3, b3=b3):
+                    cfg = maximal_update_parametrization()
+                    cfg['al'][-1] = a3
+                    cfg['bl'][-1] = b3
+                    return cfg
 
-#                 # Define a parametrization function that includes c1, c2, and eps
-#                 def mean_field_parametrization_with_diff_cl_eps():
-#                     mf_cfg = mean_field_parametrization()
-#                     mf_cfg['cl'] = [c1, c2]
-#                     return mf_cfg
+                def a3b3_data_w_signal(eps=eps):
+                    data_cfg = a3b3_data()
+                    data_cfg["signal_strength"] = eps
+                    return data_cfg
 
-#                 def jascha_data_w_signal():
-#                     data_config = jascha_data()
-#                     data_config["signal_strength"] = eps
-#                     return data_config
+                param_args = (training_frac, mlp2h, sgd_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
+                run_name = f"mup_a3_{a3:.14f}_b3_{b3:.14f}_eps_{eps:.3f}"
+                yield exp_id, run_name, param_args
 
-#                 # Prepare the parameter arguments tuple
-#                 param_args = (training_frac, mlp1h, sgd_frac, mean_field_parametrization_with_diff_cl_eps, jascha_data_w_signal)
-
-#                 # Create a unique run name that includes c1, c2, and eps
-#                 run_name = f"mfp_c1_{c1:.14f}_c2_{c2:.14f}_eps_{eps:.3f}"
-
-#                 # Yield the experiment configuration
-#                 yield exp_id, run_name, param_args
 
 # Common:
 def sgd_frac():
@@ -167,13 +158,13 @@ def sgd_frac():
     return Config(
         obj=SGD,
         params={
-            "lr": 1e-2,
+            "lr": 1e-1,
         },
     )
 
 def training_frac():
     from fractal import train
-    N_STEPS = 500
+    N_STEPS = 1500
     return Config(
         obj=train,
         params={
