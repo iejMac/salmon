@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(mess
 # Parameters
 runs_dir = "/app/maciej/junk/fractal/runs"
 visualizations_dir = "./figures"
-exp_name = "mf_tanh_c_zoom2_R512"
+exp_name = "testing"
 output_image = os.path.join(visualizations_dir, f"{exp_name}.png")
 output_array = os.path.join(visualizations_dir, f"{exp_name}.npy")
 max_val = 1e6

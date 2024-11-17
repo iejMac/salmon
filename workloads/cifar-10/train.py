@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from config import mlp_base, adamw_base, sgd_base, training_base
+from configs.cifar_config import mlp_base, adamw_base, sgd_base, training_base
 from data import CIFAR10Dataset
 
 from parametrization import standard_parametrization, mu_parametrization
