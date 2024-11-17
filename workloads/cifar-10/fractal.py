@@ -5,35 +5,32 @@ import time
 import torch
 import torch.nn.functional as F
 import numpy as np
-from data import SyntheticNormalDataset
-from parametrization import abc_parametrization
 
 torch.set_default_dtype(torch.float64)
 
 class BinaryLogger:
-    def __init__(self, log_dir, n_steps, n_layers):
+    def __init__(self, log_dir, n_steps, metrics):
         self.log_dir = log_dir
         self.n_steps = n_steps
-        self.losses = np.zeros(n_steps, dtype=np.float64)
-        self.rLs = np.zeros(n_steps, dtype=np.float64)
-        self.Als = np.zeros((n_steps, n_layers, 4), dtype=np.float64)  # A_cum, A_alpha, A_omega, A_u
-    
-    def log(self, step, loss, rL, Al):
-        self.losses[step] = loss
-        self.rLs[step] = rL
-        self.Als[step, :] = Al
+
+        self.metrics = {}
+        for m_name, m_shape in metrics.items():
+            m_full_shape = (n_steps,) + m_shape
+            self.metrics[m_name] = np.zeros(m_full_shape, dtype=np.float64)
+   
+    def log(self, metric):
+        step = metric.pop("step")
+        for m_name, m in metric.items():
+            self.metrics[m_name][step] = m
 
     def save(self):
-        np.save(os.path.join(self.log_dir, 'losses.npy'), self.losses)
-        np.save(os.path.join(self.log_dir, 'rLs.npy'), self.rLs)
-        np.save(os.path.join(self.log_dir, 'Als.npy'), self.Als)
+        for m_name, m_dat in self.metrics.items():
+            np.save(os.path.join(self.log_dir, f"{m_name}.npy"), m_dat)
 
 def train(
         model_config, optimizer_config, parametrization_config, data_config,
-        batch_size, 
         n_train_steps,
         log_freq,
-        data_signal_strength=0.0,
         seed=0,
         run_dir="./runs", data_dir="./data",
     ):
@@ -52,18 +49,14 @@ def train(
 
     opt = opt_cfg.build(params=params)
 
-    train_loader = data_config().build(dataset_size=batch_size, batch_size=batch_size, width=width, device=device)
-    # train_loader = SyntheticNormalDataset(
-    #     dataset_size=batch_size, batch_size=batch_size, width=width, resample=False, # full batch GD
-    #     signal_strength=0.5,
-    #     device=device,
-    # )
+    train_loader = data_config().build(device=device)
 
-    # Set up a fixed measurement batch for logging
-    measurement_X, _ = next(iter(train_loader))
-
-    # Use BinaryLogger instead of CSVLogger for faster writes
-    logger = BinaryLogger(run_dir, n_steps=n_train_steps, n_layers=model.n_layers)
+    metrics = {
+        "losses": (1,),
+        "rLs": (1,),
+        # "Als": (model.n_layers, 4),  # A_cum, A_alpha, A_omega, A_u
+    }
+    logger = BinaryLogger(run_dir, n_steps=n_train_steps, metrics=metrics)
 
     log_sample_size = 32
     trace = {}
@@ -79,6 +72,7 @@ def train(
         l.register_forward_hook(trace_layer(f'lin_{l_id}'))
 
     # Compute initial features
+    measurement_X, _ = next(iter(train_loader))
     with torch.no_grad():
         model(measurement_X)
     zL_init = trace[f'lin_{model.n_layers - 1}']["input"].clone()
@@ -97,62 +91,73 @@ def train(
 
         # Check for divergence
         if not np.isfinite(loss_item):  # Detect inf/nan
-            loss_item = np.inf
             diverged = True  # Set flag to stop further computation
-            logger.losses[s:] = loss_item  # Fill remaining steps with inf
-            logger.log_norm_delta_features[s:] = np.nan
+            for m_name in logger.metrics:
+                logger.metrics[m_name][s:] = np.inf
             print("Exiting early due to divergence...")
             break
 
+        metric = {
+            "step": s,
+        }
+
+        if "losses" in metrics:
+            metric["losses"] = loss_item
+
         if s % log_freq == 0:
             with torch.no_grad():
-                # compute feature_learning metric rL
-                zL_current = trace[f'lin_{model.n_layers - 1}']["input"]
-                delta_zL = zL_current - zL_init
-                norm_delta_zL = delta_zL.norm().item()
-                if norm_delta_zL > 0:
-                    rL = np.log(norm_delta_zL) / np.log(width)
-                else:
-                    rL = -np.inf if s > 0 else 0  # (first step its exactly 0)
+                if "rLs" in metrics:
+                    # compute feature_learning metric rL
+                    zL_current = trace[f'lin_{model.n_layers - 1}']["input"]
+                    delta_zL = zL_current - zL_init
+                    norm_delta_zL = delta_zL.norm().item()
+                    if norm_delta_zL > 0:
+                        rL = np.log(norm_delta_zL) / np.log(width)
+                    else:
+                        rL = -np.inf if s > 0 else 0  # (first step its exactly 0)
+                    metric["rLs"] = rL
 
                 # compute alignment metric
-                Al = []
-                for l_id in range(model.n_layers):
-                    rms_norm = lambda x: torch.sqrt(torch.mean(x ** 2))
-                    z, w, o = trace[f"lin_{l_id}"]["input"], trace[f"lin_{l_id}"]["weight"], trace[f"lin_{l_id}"]["output"]
-                    z_n, w_n, o_n = rms_norm(z), rms_norm(w), rms_norm(o)
+                if "Als" in metrics:
+                    Al = []
+                    for l_id in range(model.n_layers):
+                        rms_norm = lambda x: torch.sqrt(torch.mean(x ** 2))
+                        z, w, o = trace[f"lin_{l_id}"]["input"], trace[f"lin_{l_id}"]["weight"], trace[f"lin_{l_id}"]["output"]
+                        z_n, w_n, o_n = rms_norm(z), rms_norm(w), rms_norm(o)
 
-                    z_init, w_init = trace_init[f"lin_{l_id}"]["input"], trace_init[f"lin_{l_id}"]["weight"]
-                    dw, dz = w - w_init, z - z_init
-                    dw_n, dz_n = rms_norm(dw), rms_norm(dz)
+                        z_init, w_init = trace_init[f"lin_{l_id}"]["input"], trace_init[f"lin_{l_id}"]["weight"]
+                        dw, dz = w - w_init, z - z_init
+                        dw_n, dz_n = rms_norm(dw), rms_norm(dz)
 
-                    # I. cumulative alignment
-                    # NOTE: this is supposed to be log_{fan_in}, for now its always always fan_in = width
-                    A_cum = (torch.log(o_n) - torch.log(z_n * w_n)) / torch.log(torch.tensor(width))
-                    if dw_n + dz_n != 0.0:
-                        # II. alpha alignment
-                        o = z @ dw.T
-                        o_n = rms_norm(o)
-                        A_alpha = (torch.log(o_n) - torch.log(z_n * dw_n)) / torch.log(torch.tensor(width))
-                        if l_id > 0:  # by definition z = x therefore dz = 0
-                            # III. omega alignment
-                            o = dz @ w.T
+                        # I. cumulative alignment
+                        # NOTE: this is supposed to be log_{fan_in}, for now its always always fan_in = width
+                        A_cum = (torch.log(o_n) - torch.log(z_n * w_n)) / torch.log(torch.tensor(width))
+                        if dw_n + dz_n != 0.0:
+                            # II. alpha alignment
+                            o = z @ dw.T
                             o_n = rms_norm(o)
-                            A_omega = (torch.log(o_n) - torch.log(dz_n * w_n)) / torch.log(torch.tensor(width))
-                            # IV. u alignment
-                            o = dz @ dw.T
-                            o_n = rms_norm(o)
-                            A_u = (torch.log(o_n) - torch.log(dz_n * dw_n)) / torch.log(torch.tensor(width))
+                            A_alpha = (torch.log(o_n) - torch.log(z_n * dw_n)) / torch.log(torch.tensor(width))
+                            if l_id > 0:  # by definition z = x therefore dz = 0
+                                # III. omega alignment
+                                o = dz @ w.T
+                                o_n = rms_norm(o)
+                                A_omega = (torch.log(o_n) - torch.log(dz_n * w_n)) / torch.log(torch.tensor(width))
+                                # IV. u alignment
+                                o = dz @ dw.T
+                                o_n = rms_norm(o)
+                                A_u = (torch.log(o_n) - torch.log(dz_n * dw_n)) / torch.log(torch.tensor(width))
+                            else:
+                                temp = -torch.inf if s > 0 else torch.tensor(0)
+                                A_omega, A_u = temp, temp
                         else:
                             temp = -torch.inf if s > 0 else torch.tensor(0)
-                            A_omega, A_u = temp, temp
-                    else:
-                        temp = -torch.inf if s > 0 else torch.tensor(0)
-                        A_alpha, A_omega, A_u = temp, temp, temp
+                            A_alpha, A_omega, A_u = temp, temp, temp
 
-                    Al.append(torch.tensor([A_cum, A_alpha, A_omega, A_u]))
-                Al = torch.stack(Al).detach().cpu().numpy()
-            logger.log(s, loss_item, rL, Al)  # Log each step's loss and log_norm
+                        Al.append(torch.tensor([A_cum, A_alpha, A_omega, A_u]))
+                    Al = torch.stack(Al).detach().cpu().numpy()
+                    metric["Als"] = Al
+
+            logger.log(metric)
 
         loss.backward()
         opt.step()
@@ -184,14 +189,14 @@ def main(run_name, training_config, model_config, optimizer_config, parametrizat
         run_dir=run_dir,
     )
 
-from configs.fractal_config import jascha_grid, jascha_grid_w_eps
+from configs.fractal_config import jascha_grid, mup_a3b3_grid
 
 if __name__ == "__main__":
     worker_id = int(os.environ.get("WORKER_ID", 0))
     n_workers = int(os.environ.get("N_WORKERS", 1))
 
     # grid = jascha_grid
-    grid = jascha_grid_w_eps
+    grid = mup_a3b3_grid
     for exp_id, run_name, param_args in grid():
         if exp_id % n_workers == worker_id:
             t0 = time.time()
