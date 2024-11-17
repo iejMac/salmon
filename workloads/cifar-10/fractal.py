@@ -29,10 +29,11 @@ class BinaryLogger:
         np.save(os.path.join(self.log_dir, 'Als.npy'), self.Als)
 
 def train(
-        model_config, optimizer_config, parametrization_config,
+        model_config, optimizer_config, parametrization_config, data_config,
         batch_size, 
         n_train_steps,
         log_freq,
+        data_signal_strength=0.0,
         seed=0,
         run_dir="./runs", data_dir="./data",
     ):
@@ -51,11 +52,12 @@ def train(
 
     opt = opt_cfg.build(params=params)
 
-    train_loader = SyntheticNormalDataset(
-        dataset_size=batch_size, batch_size=batch_size, width=width, resample=False, # full batch GD
-        signal_strength=0.0,
-        device=device,
-    )
+    train_loader = data_config().build(dataset_size=batch_size, batch_size=batch_size, width=width, device=device)
+    # train_loader = SyntheticNormalDataset(
+    #     dataset_size=batch_size, batch_size=batch_size, width=width, resample=False, # full batch GD
+    #     signal_strength=0.5,
+    #     device=device,
+    # )
 
     # Set up a fixed measurement batch for logging
     measurement_X, _ = next(iter(train_loader))
@@ -159,7 +161,7 @@ def train(
     # Save the final arrays to binary format
     logger.save()
 
-def main(run_name, model_config, optimizer_config, training_config, parametrization_config):
+def main(run_name, training_config, model_config, optimizer_config, parametrization_config, data_config):
     run_dir = os.path.join("/app/maciej/junk/fractal/runs", run_name)
     os.makedirs(run_dir, exist_ok=True)
     configs = {
@@ -167,6 +169,7 @@ def main(run_name, model_config, optimizer_config, training_config, parametrizat
         # "model": model_config,
         # "optimizer": optimizer_config,
         "parametrization": parametrization_config,
+        "data": data_config,
     }
     for config_name, config in configs.items():
         config_path = os.path.join(run_dir, f"{config_name}_config.json")
@@ -177,18 +180,19 @@ def main(run_name, model_config, optimizer_config, training_config, parametrizat
         model_config=model_config, 
         optimizer_config=optimizer_config,
         parametrization_config=parametrization_config,
+        data_config=data_config,
         run_dir=run_dir,
     )
 
-from configs.fractal_config import jascha_grid
+from configs.fractal_config import jascha_grid, jascha_grid_w_eps
 
 if __name__ == "__main__":
-    RESOLUTION = 4
     worker_id = int(os.environ.get("WORKER_ID", 0))
     n_workers = int(os.environ.get("N_WORKERS", 1))
 
-    grid = jascha_grid
-    for exp_id, run_name, param_args in grid(resolution=RESOLUTION):
+    # grid = jascha_grid
+    grid = jascha_grid_w_eps
+    for exp_id, run_name, param_args in grid():
         if exp_id % n_workers == worker_id:
             t0 = time.time()
             main(run_name, *param_args)
