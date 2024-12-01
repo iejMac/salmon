@@ -79,7 +79,8 @@ N_FREE_PARAMS_2 = (DATA_DIM * N_FRAC_2) + (N_FRAC_2 * N_FRAC_2) + (N_FRAC_2 * 1)
 def maximal_update_parametrization():
     from parametrization import abc_parametrization
     # NOTE: overfit to mlp2h model config
-    al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.0, 0.0, 0.0] # mean field
+    # al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.0, 0.0, 0.0]  # sgd
+    al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.5, 1.0, 0.5]  # adam
     return Config(
         obj=abc_parametrization,
         params={
@@ -147,7 +148,8 @@ def mup_a3b3_eps_grid():
                     data_cfg["signal_strength"] = eps
                     return data_cfg
 
-                param_args = (training_frac, mlp2h, sgd_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
+                # param_args = (training_frac, mlp2h, sgd_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
+                param_args = (training_frac, mlp2h, adamw_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
                 run_name = f"mup_a3_{a3:.14f}_b3_{b3:.14f}_eps_{eps:.3f}"
                 yield exp_id, run_name, param_args
 
@@ -159,6 +161,15 @@ def sgd_frac():
         obj=SGD,
         params={
             "lr": 1e-1,
+        },
+    )
+
+def adamw_frac():
+    from torch.optim import AdamW
+    return Config(
+        obj=AdamW,
+        params={
+            "lr": 5e-3,
         },
     )
 

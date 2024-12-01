@@ -167,7 +167,7 @@ def train(
     logger.save()
 
 def main(run_name, training_config, model_config, optimizer_config, parametrization_config, data_config):
-    run_dir = os.path.join("/app/maciej/junk/fractal/runs", run_name)
+    run_dir = os.path.join("/home/maciej/code/salmon/workloads/cifar-10/runs/runs", run_name)
     os.makedirs(run_dir, exist_ok=True)
     configs = {
         # "training": training_config,
