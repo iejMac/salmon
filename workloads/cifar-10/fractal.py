@@ -6,6 +6,8 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from parametrization import maximal_lr_scheduler
+
 torch.set_default_dtype(torch.float64)
 
 class BinaryLogger:
@@ -38,7 +40,6 @@ def train(
 
     device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
 
-
     model = model_config().build()
     model = model.to(device)
 
@@ -48,6 +49,9 @@ def train(
     params = parametrization_config().build(mlp=model, n=width, lr_prefactor=opt_cfg['lr'], std_prefactor=1.0)
 
     opt = opt_cfg.build(params=params)
+
+    param_cfg = parametrization_config()
+    scheduler = maximal_lr_scheduler(opt, n=width, al=param_cfg['al'], bl=param_cfg['bl'], lr_prefactor=opt_cfg['lr'])
 
     train_loader = data_config().build(device=device)
 
@@ -160,6 +164,17 @@ def train(
             logger.log(metric)
 
         loss.backward()
+        print(loss)
+
+        # TESTING
+        alpha_l = Al[:, 1].tolist()
+        omega_l = Al[:, 2].tolist()
+        u_l = Al[:, 3].tolist()
+        lrs = scheduler(alpha_l=alpha_l, u_l=u_l, omega_l=omega_l)
+        print(lrs)
+        print()
+        # TESTING
+
         opt.step()
         s += 1
 

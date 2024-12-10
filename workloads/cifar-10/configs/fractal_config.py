@@ -44,8 +44,8 @@ def jascha_data():
 
 def jascha_grid():
     resolution = 4
-    c1_grid = np.linspace(-1.5, -0.5, num=resolution)
-    c2_grid = np.linspace(-1.5, -0.5, num=resolution)
+    c1_grid = np.linspace(-1.5, -0.5, num=resolution).tolist()
+    c2_grid = np.linspace(-1.5, -0.5, num=resolution).tolist()
 
     for c1_id, c1 in enumerate(c1_grid):
         for c2_id, c2 in enumerate(c2_grid):
@@ -79,8 +79,8 @@ N_FREE_PARAMS_2 = (DATA_DIM * N_FRAC_2) + (N_FRAC_2 * N_FRAC_2) + (N_FRAC_2 * 1)
 def maximal_update_parametrization():
     from parametrization import abc_parametrization
     # NOTE: overfit to mlp2h model config
-    # al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.0, 0.0, 0.0]  # sgd
-    al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.5, 1.0, 0.5]  # adam
+    al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.0, 0.0, 0.0]  # sgd
+    # al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.5, 1.0, 0.5]  # adam
     return Config(
         obj=abc_parametrization,
         params={
@@ -106,8 +106,8 @@ def a3b3_data():
 
 def mup_a3b3_grid():
     resolution = 16
-    a3_grid = np.linspace(-0.5, 1.5, num=resolution)  # Adjust the range as needed
-    b3_grid = np.linspace(-0.5, 1.5, num=resolution)  # Adjust the range as needed
+    a3_grid = np.linspace(-0.5, 1.5, num=resolution).tolist()  # Adjust the range as needed
+    b3_grid = np.linspace(-0.5, 1.5, num=resolution).tolist()  # Adjust the range as needed
 
     for a3_id, a3 in enumerate(a3_grid):
         for b3_id, b3 in enumerate(b3_grid):
@@ -128,9 +128,12 @@ def mup_a3b3_eps_grid():
     sp_resolution = 4
     t_resolution = 11
 
-    a3_grid = np.linspace(-0.5, 1.5, num=sp_resolution)
-    b3_grid = np.linspace(-0.5, 1.5, num=sp_resolution)
-    eps_grid = np.linspace(0.0, 1.0, num=t_resolution)
+    # a3_grid = np.linspace(-0.5, 1.5, num=sp_resolution).tolist()
+    # b3_grid = np.linspace(-0.5, 1.5, num=sp_resolution).tolist()
+    a3_grid = [0.5]
+    b3_grid = [0.5]
+    # eps_grid = np.linspace(0.0, 1.0, num=t_resolution).tolist()
+    eps_grid = [1.0]
 
     for a3_id, a3 in enumerate(a3_grid):
         for b3_id, b3 in enumerate(b3_grid):
@@ -148,8 +151,8 @@ def mup_a3b3_eps_grid():
                     data_cfg["signal_strength"] = eps
                     return data_cfg
 
-                # param_args = (training_frac, mlp2h, sgd_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
-                param_args = (training_frac, mlp2h, adamw_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
+                param_args = (training_frac, mlp2h, sgd_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
+                # param_args = (training_frac, mlp2h, adamw_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
                 run_name = f"mup_a3_{a3:.14f}_b3_{b3:.14f}_eps_{eps:.3f}"
                 yield exp_id, run_name, param_args
 
@@ -175,7 +178,8 @@ def adamw_frac():
 
 def training_frac():
     from fractal import train
-    N_STEPS = 1500
+    # N_STEPS = 1500
+    N_STEPS = 100
     return Config(
         obj=train,
         params={
