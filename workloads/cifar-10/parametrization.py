@@ -134,13 +134,11 @@ def maximal_lr_scheduler(optimizer, n, al, bl, lr_prefactor=0.1):
         return cl
 
     def _lr_adjuster(alpha_l, u_l, omega_l):
-        print(alpha_l, u_l, omega_l)
         # Compute c_l based on measured alignment
         cl = _compute_cl(alpha_l=alpha_l, omega_l=omega_l, u_l=u_l)
-        print(cl)
         # Dynamically adjust learning rates for each parameter group 
         for i, (param_group, c) in enumerate(zip(optimizer.param_groups, cl)):
             lr_scale = n ** -c
-            # param_group['lr'] = lr_prefactor * lr_scale
+            param_group['lr'] = lr_prefactor * lr_scale
         return [param_group['lr'] for param_group in optimizer.param_groups]
     return _lr_adjuster    

@@ -130,6 +130,7 @@ def train(
                         z_n, w_n, o_n = rms_norm(z), rms_norm(w), rms_norm(o)
 
                         z_init, w_init = trace_init[f"lin_{l_id}"]["input"], trace_init[f"lin_{l_id}"]["weight"]
+                        z_init_n, w_init_n = rms_norm(z_init), rms_norm(w_init)
                         dw, dz = w - w_init, z - z_init
                         dw_n, dz_n = rms_norm(dw), rms_norm(dz)
 
@@ -138,14 +139,18 @@ def train(
                         A_cum = (torch.log(o_n) - torch.log(z_n * w_n)) / torch.log(torch.tensor(width))
                         if dw_n + dz_n != 0.0:
                             # II. alpha alignment
-                            o = z @ dw.T
+                            # o = z @ dw.T
+                            o = z_init @ dw.T
                             o_n = rms_norm(o)
-                            A_alpha = (torch.log(o_n) - torch.log(z_n * dw_n)) / torch.log(torch.tensor(width))
+                            # A_alpha = (torch.log(o_n) - torch.log(z_n * dw_n)) / torch.log(torch.tensor(width))
+                            A_alpha = (torch.log(o_n) - torch.log(z_init_n * dw_n)) / torch.log(torch.tensor(width))
                             if l_id > 0:  # by definition z = x therefore dz = 0
                                 # III. omega alignment
-                                o = dz @ w.T
+                                # o = dz @ w.T
+                                o = dz @ w_init.T
                                 o_n = rms_norm(o)
-                                A_omega = (torch.log(o_n) - torch.log(dz_n * w_n)) / torch.log(torch.tensor(width))
+                                # A_omega = (torch.log(o_n) - torch.log(dz_n * w_n)) / torch.log(torch.tensor(width))
+                                A_omega = (torch.log(o_n) - torch.log(dz_n * w_init_n)) / torch.log(torch.tensor(width))
                                 # IV. u alignment
                                 o = dz @ dw.T
                                 o_n = rms_norm(o)
@@ -163,17 +168,14 @@ def train(
 
             logger.log(metric)
 
-        loss.backward()
-        print(loss)
+            # TESTING
+            alpha_l = Al[:, 1].tolist()
+            omega_l = Al[:, 2].tolist()
+            u_l = Al[:, 3].tolist()
+            lrs = scheduler(alpha_l=alpha_l, u_l=u_l, omega_l=omega_l)
+            # TESTING
 
-        # TESTING
-        alpha_l = Al[:, 1].tolist()
-        omega_l = Al[:, 2].tolist()
-        u_l = Al[:, 3].tolist()
-        lrs = scheduler(alpha_l=alpha_l, u_l=u_l, omega_l=omega_l)
-        print(lrs)
-        print()
-        # TESTING
+        loss.backward()
 
         opt.step()
         s += 1
@@ -182,7 +184,8 @@ def train(
     logger.save()
 
 def main(run_name, training_config, model_config, optimizer_config, parametrization_config, data_config):
-    run_dir = os.path.join("/home/maciej/code/salmon/workloads/cifar-10/runs/runs", run_name)
+    run_dir = os.path.join("/home/maciej/code/salmon/workloads/cifar-10/runs/runs_max_sched", run_name)
+    # run_dir = os.path.join("/home/maciej/code/salmon/workloads/cifar-10/runs/runs_no_sched", run_name)
     os.makedirs(run_dir, exist_ok=True)
     configs = {
         # "training": training_config,

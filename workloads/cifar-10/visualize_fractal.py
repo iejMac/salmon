@@ -12,7 +12,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
 
 # Parameters
-runs_dir = "/app/maciej/junk/fractal/runs"
+runs_dir = "/home/maciej/code/salmon/workloads/cifar-10/runs/runs"
 visualizations_dir = "./figures"
 exp_name = "testing"
 output_image = os.path.join(visualizations_dir, f"{exp_name}.png")

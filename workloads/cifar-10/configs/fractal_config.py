@@ -79,8 +79,8 @@ N_FREE_PARAMS_2 = (DATA_DIM * N_FRAC_2) + (N_FRAC_2 * N_FRAC_2) + (N_FRAC_2 * 1)
 def maximal_update_parametrization():
     from parametrization import abc_parametrization
     # NOTE: overfit to mlp2h model config
-    al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.0, 0.0, 0.0]  # sgd
-    # al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.5, 1.0, 0.5]  # adam
+    # al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.0, 0.0, 0.0]  # sgd
+    al, bl, cl = [-0.5, 0.0, 0.5], [0.5, 0.5, 0.5], [0.5, 1.0, 0.5]  # adam
     return Config(
         obj=abc_parametrization,
         params={
@@ -125,13 +125,17 @@ def mup_a3b3_grid():
             yield exp_id, run_name, param_args
 
 def mup_a3b3_eps_grid():
-    sp_resolution = 4
+    sp_resolution = 8
     t_resolution = 11
 
     # a3_grid = np.linspace(-0.5, 1.5, num=sp_resolution).tolist()
     # b3_grid = np.linspace(-0.5, 1.5, num=sp_resolution).tolist()
-    a3_grid = [0.5]
-    b3_grid = [0.5]
+    # a3_grid = np.linspace(0.2, 2.0, num=sp_resolution).tolist()
+    # b3_grid = np.linspace(0.5, 2.0, num=sp_resolution).tolist()
+    a3_grid = np.linspace(0.3, 0.7, num=sp_resolution).tolist()
+    b3_grid = np.linspace(0.3, 0.7, num=sp_resolution).tolist()
+    # a3_grid = [0.5]
+    # b3_grid = [0.5]
     # eps_grid = np.linspace(0.0, 1.0, num=t_resolution).tolist()
     eps_grid = [1.0]
 
@@ -151,8 +155,8 @@ def mup_a3b3_eps_grid():
                     data_cfg["signal_strength"] = eps
                     return data_cfg
 
-                param_args = (training_frac, mlp2h, sgd_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
-                # param_args = (training_frac, mlp2h, adamw_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
+                # param_args = (training_frac, mlp2h, sgd_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
+                param_args = (training_frac, mlp2h, adamw_frac, mup_w_diff_a3b3_eps, a3b3_data_w_signal)
                 run_name = f"mup_a3_{a3:.14f}_b3_{b3:.14f}_eps_{eps:.3f}"
                 yield exp_id, run_name, param_args
 

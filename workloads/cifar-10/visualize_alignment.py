@@ -50,8 +50,15 @@ FIG_HEIGHT_INCHES = pixel_height / DPI
 def load_params_from_json(subdir_path: str, grid_parameters: List[str]) -> Tuple[float, float]:
     """Load specified parameters from parametrization config."""
     config_path = os.path.join(subdir_path, 'parametrization_config.json')
-    with open(config_path, 'r') as f:
-        config = json.load(f)
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+    except FileNotFoundError:
+        print(f"Missing parametrization_config.json in {subdir_path}")
+        return (None, None)
+    except json.JSONDecodeError:
+        print(f"JSON parsing error in {config_path}")
+        return (None, None)
     
     # Extract the specified parameters from config
     parameter_values = []
@@ -67,7 +74,7 @@ def load_params_from_json(subdir_path: str, grid_parameters: List[str]) -> Tuple
                     idx = int(key)
                     value = value[idx]
                 except (ValueError, IndexError):
-                    print(f"Invalid key '{key}' for list in parameter '{param}'")
+                    print(f"Invalid key '{key}' for list in parameter '{param}' (dir: {subdir_path})")
                     value = None
                     break
             else:
@@ -94,8 +101,8 @@ def create_single_plot(directories: List[str], output_path: str, signal_strength
         param_pairs.append(params)
 
     # Get unique sorted values
-    param1_values = sorted(set(pair[0] for pair in param_pairs))
-    param2_values = sorted(set(pair[1] for pair in param_pairs))
+    param1_values = sorted(set(pair[0] for pair in param_pairs if pair[0] is not None))
+    param2_values = sorted(set(pair[1] for pair in param_pairs if pair[1] is not None))
 
     # Grid sizes
     N = len(param1_values)
@@ -106,6 +113,7 @@ def create_single_plot(directories: List[str], output_path: str, signal_strength
         return
 
     # Create position mapping
+    # (This is optional in your code, but let's keep it for clarity.)
     pos_map = {(p1, p2): (i, j) for i, p1 in enumerate(param1_values) for j, p2 in enumerate(param2_values)}
 
     # Create figure with even dimensions
@@ -119,26 +127,60 @@ def create_single_plot(directories: List[str], output_path: str, signal_strength
 
     used_layer_indices = set()
 
+    # Initialize all subplots with "No data" placeholders
+    for i in range(N):
+        for j in range(M):
+            ax = axes[i, j]
+            ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes, fontsize=8)
+            ax.set_xlabel(grid_parameters[0])
+            ax.set_ylabel(grid_parameters[1])
+            ax.grid(alpha=0.3)
+
     # Plot for each directory
     for dir_path in directories:
         # Load parameters
         params = load_params_from_json(dir_path, grid_parameters)
         if None in params:
-            print(f"Skipping {dir_path}: Missing parameter(s) {grid_parameters}")
             continue
         try:
             row = param1_values.index(params[0])
             col = param2_values.index(params[1])
             ax = axes[row, col]
+            # Clear the "No data" placeholder if we can plot something
+            ax.clear()
         except ValueError:
             print(f"Skipping {dir_path}: Parameter values not found in param_values")
             continue
 
-        # Load metrics
-        alignment_metrics = np.load(os.path.join(dir_path, 'Als.npy'))
-        losses = np.load(os.path.join(dir_path, 'losses.npy'))
-        avg_last_20_losses = np.mean(losses[-20:])
+        als_path = os.path.join(dir_path, 'Als.npy')
+        losses_path = os.path.join(dir_path, 'losses.npy')
 
+        # Attempt to load alignment_metrics
+        try:
+            alignment_metrics = np.load(als_path)
+        except FileNotFoundError:
+            print(f"Missing Als.npy in {dir_path}. Subplot will remain empty.")
+            ax.text(0.5, 0.5, 'Missing Als.npy', ha='center', va='center', transform=ax.transAxes, fontsize=8)
+            continue
+        except Exception as e:
+            print(f"Error loading {als_path}: {str(e)}. Subplot will remain empty.")
+            ax.text(0.5, 0.5, 'Error loading Als.npy', ha='center', va='center', transform=ax.transAxes, fontsize=8)
+            continue
+
+        # Attempt to load losses
+        try:
+            losses = np.load(losses_path)
+        except FileNotFoundError:
+            print(f"Missing losses.npy in {dir_path}. Subplot will remain empty.")
+            ax.text(0.5, 0.5, 'Missing losses.npy', ha='center', va='center', transform=ax.transAxes, fontsize=8)
+            continue
+        except Exception as e:
+            print(f"Error loading {losses_path}: {str(e)}. Subplot will remain empty.")
+            ax.text(0.5, 0.5, 'Error loading losses.npy', ha='center', va='center', transform=ax.transAxes, fontsize=8)
+            continue
+
+        # Now we have both alignment_metrics and losses
+        avg_last_20_losses = np.mean(losses[-20:])
         n_steps, n_layers, n_components = alignment_metrics.shape
 
         # Create plots
@@ -146,14 +188,20 @@ def create_single_plot(directories: List[str], output_path: str, signal_strength
             used_layer_indices.add(layer)
             for comp_idx, comp_name in enumerate(COMPONENT_STYLES.keys()):
                 line_style = COMPONENT_STYLES[comp_name]
-                ax.plot(alignment_metrics[:, layer, comp_idx], 
-                        line_style,
-                        color=LAYER_COLORS[layer % len(LAYER_COLORS)],
-                        alpha=0.7 if comp_idx > 0 else 1.0)
+                ax.plot(
+                    alignment_metrics[:, layer, comp_idx],
+                    line_style,
+                    color=LAYER_COLORS[layer % len(LAYER_COLORS)],
+                    alpha=0.7 if comp_idx > 0 else 1.0
+                )
 
         # Configure subplot
         ax.set_ylim(bottom=0.0, top=1.0)
-        ax.set_title(f'{grid_parameters[0]}={params[0]:.2f}, {grid_parameters[1]}={params[1]:.2f}\nLoss(Last 20)={avg_last_20_losses:.4f}', fontsize=8)
+        ax.set_title(
+            f'{grid_parameters[0]}={params[0]:.2f}, {grid_parameters[1]}={params[1]:.2f}\n'
+            f'Loss(Last 20)={avg_last_20_losses:.4f}',
+            fontsize=8
+        )
         ax.tick_params(axis='both', which='both', labelsize=6)
         ax.grid(True, alpha=0.3)
 
@@ -169,13 +217,15 @@ def create_single_plot(directories: List[str], output_path: str, signal_strength
     ]
 
     # Add legends
-    fig.legend(handles=used_layer_legend_elements + component_legend_elements,
-               loc='lower center',
-               bbox_to_anchor=(0.5, 0.0),
-               ncol=len(used_layer_legend_elements) + len(component_legend_elements),
-               title="Layers and Components",
-               fontsize=8,
-               frameon=True)
+    fig.legend(
+        handles=used_layer_legend_elements + component_legend_elements,
+        loc='lower center',
+        bbox_to_anchor=(0.5, 0.0),
+        ncol=len(used_layer_legend_elements) + len(component_legend_elements),
+        title="Layers and Components",
+        fontsize=8,
+        frameon=True
+    )
 
     # Save plot
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])  # Adjust rect to make space for legend
@@ -249,6 +299,6 @@ def create_ffmpeg_script(output_dir: str, num_frames: int):
 
 if __name__ == "__main__":
     # Set this path as needed
-    ROOT_DIR = '/app/maciej/junk/fractal/runs'
+    ROOT_DIR = '/home/maciej/code/salmon/workloads/cifar-10/runs/runs'
     GRID_PARAMETERS = ['al.2', 'bl.2']  # Modify this list to specify different grid parameters
     save_frames(ROOT_DIR, GRID_PARAMETERS)
