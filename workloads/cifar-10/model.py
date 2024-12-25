@@ -13,7 +13,7 @@ class MLP(nn.Module):
         for i, layer in enumerate(self.layers):
             x = layer(x)
 
-            x *= self.layer_multipliers[i]
+            x = x * self.layer_multipliers[i]
 
             if i < self.n_layers - 1:
                 # x = F.relu(x)

@@ -11,7 +11,8 @@ import multiprocessing
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
 
 # Parameters
-runs_dir = "/app/maciej/junk/fractal/runs_tanh_zoom0"
+# runs_dir = "/app/maciej/junk/fractal/runs_tanh_zoom0"
+runs_dir = "/home/maciej/code/salmon/workloads/cifar-10/runs/runs"
 visualizations_dir = "./figures"
 exp_name = "mf_tanh_c_zoom0_R512"
 output_gif = os.path.join(visualizations_dir, f"{exp_name}.gif")  # Output GIF file

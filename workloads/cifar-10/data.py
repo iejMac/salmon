@@ -25,19 +25,30 @@ class CIFAR10Dataset:
             yield X, y
 
 class SyntheticNormalDataset:
-    def __init__(self, batch_size, n=16, device="cpu", dataset_size=None):
+    def __init__(self, dataset_size, batch_size, width, device="cpu", resample=True, signal_strength=0.0):
         self.batch_size = batch_size
         self.device = device
-        self.n = n
-        self.dataset_size = dataset_size or (n ** 2 + n)  # Default size as per the paper
+        self.width = width
+        self.dataset_size = dataset_size
+        self.resample = resample
 
         # Generate synthetic data and labels from N(0, 1)
-        self.X = torch.randn(self.dataset_size, n).to(device)
-        self.Y = torch.randn(self.dataset_size, 1).to(device)
+        self.X = torch.randn(self.dataset_size, width).to(device)
+
+        # Generate weights for a linear relationship and add Gaussian noise to Y
+        true_weights = torch.randn(width, 1).to(device)
+        noise = torch.randn(self.dataset_size, 1).to(device)
+        self.Y = self.X @ true_weights * signal_strength + noise * (1.0 - signal_strength)
+
 
     def __iter__(self):
         while True:
-            idx = torch.randint(0, self.X.shape[0], (self.batch_size,))
+            if self.resample:
+                idx = torch.randint(0, self.X.shape[0], (self.batch_size,))
+            else:
+                idx = torch.randperm(self.X.shape[0])[:self.batch_size]
+                if self.batch_size == self.dataset_size:
+                    idx = torch.arange(0, self.X.shape[0])
             X = self.X[idx]
             y = self.Y[idx]
             yield X, y
